@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MIDENA · Diagram</title>
+  <link rel="icon" href="/favicon.svg">
+  <link rel="stylesheet" href="/vendor/bootstrap/bootstrap.min.css">
+  <link rel="stylesheet" href="/vendor/bootstrap-icons/bootstrap-icons.min.css">
+  <link rel="stylesheet" href="/vendor/mosp-design-system/styles.css">
+  <link rel="stylesheet" href="/vendor/bpmn-js/assets/diagram-js.css">
+  <link rel="stylesheet" href="/vendor/bpmn-js/assets/bpmn-js.css">
+  <link rel="stylesheet" href="/vendor/bpmn-js/assets/bpmn-font/css/bpmn.css">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="navbar"></div>
+  <main class="container-fluid py-3">
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+      <div>
+        <h1 class="h3 mb-1" id="diagramTitle">Diagram</h1>
+        <p class="text-secondary mb-1" id="diagramMeta">Loading…</p>
+        <div id="diagramTagsDisplay" class="small d-none"></div>
+      </div>
+      <div class="btn-toolbar gap-2">
+        <button class="btn btn-outline-secondary" id="toggleSidebarBtn" type="button"><i class="bi bi-layout-sidebar-inset-reverse me-1"></i>Expand sidebar</button>
+        <button class="btn btn-outline-secondary" id="toggleEditorBtn" type="button" aria-pressed="false" aria-controls="bpmnToolbar sequencePane flowchartPane canvas"><i class="bi bi-eye me-1"></i>Collapse editor</button>
+        <div class="btn-group">
+          <button class="btn btn-outline-secondary" id="lockBtn"><i class="bi bi-lock me-1"></i>Lock</button>
+          <button class="btn btn-outline-secondary" id="unlockBtn"><i class="bi bi-unlock me-1"></i>Unlock</button>
+        </div>
+        <button class="btn btn-primary" id="saveBtn"><i class="bi bi-save me-1"></i>Save new version</button>
+        <button class="btn btn-outline-secondary" id="importBtn" type="button"><i class="bi bi-upload me-1"></i>Import</button>
+        <button class="btn btn-outline-secondary" id="cloneBtn" type="button"><i class="bi bi-files me-1"></i>Clone</button>
+        <button class="btn btn-outline-secondary" id="embedBtn" type="button" disabled><i class="bi bi-code-slash me-1"></i>Embed</button>
+        <div class="btn-group">
+          <button class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown">Export</button>
+          <ul class="dropdown-menu dropdown-menu-end">
+            <li><button class="dropdown-item" data-export="bpmn">BPMN XML</button></li>
+            <li><button class="dropdown-item" data-export="svg">SVG</button></li>
+            <li><button class="dropdown-item" data-export="png">PNG</button></li>
+            <li><button class="dropdown-item" data-export="jpg">JPG</button></li>
+            <li><button class="dropdown-item" data-export="pdf">PDF</button></li>
+            <li><hr class="dropdown-divider"></li>
+            <li><button class="dropdown-item" type="button" id="googleDriveBtn"><i class="bi bi-google me-1"></i>Export to Google Drive…</button></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="row g-3 sidebar-collapsed" id="diagramWorkspace">
+      <div class="col-xl-12" id="editorCol">
+        <div class="btn-toolbar gap-2 mb-2" id="bpmnToolbar" aria-label="BPMN editor tools">
+          <div class="btn-group btn-group-sm" role="group" aria-label="History">
+            <button class="btn btn-outline-secondary" type="button" data-tool="undo" title="Undo"><i class="bi bi-arrow-counterclockwise"></i></button>
+            <button class="btn btn-outline-secondary" type="button" data-tool="redo" title="Redo"><i class="bi bi-arrow-clockwise"></i></button>
+          </div>
+          <div class="btn-group btn-group-sm" role="group" aria-label="Zoom">
+            <button class="btn btn-outline-secondary" type="button" data-tool="zoom-out" title="Zoom out"><i class="bi bi-zoom-out"></i></button>
+            <button class="btn btn-outline-secondary" type="button" data-tool="fit" title="Fit to viewport"><i class="bi bi-arrows-fullscreen"></i></button>
+            <button class="btn btn-outline-secondary" type="button" data-tool="zoom-in" title="Zoom in"><i class="bi bi-zoom-in"></i></button>
+          </div>
+          <div class="btn-group btn-group-sm" role="group" aria-label="Canvas tools">
+            <button class="btn btn-outline-secondary" type="button" data-tool="select" title="Pointer/select tool"><i class="bi bi-cursor"></i> Select</button>
+            <button class="btn btn-outline-secondary" type="button" data-tool="hand" title="Hand/pan tool"><i class="bi bi-hand-index-thumb"></i> Hand</button>
+            <button class="btn btn-outline-secondary" type="button" data-tool="lasso" title="Lasso select"><i class="bi bi-bounding-box-circles"></i> Lasso</button>
+            <button class="btn btn-outline-secondary" type="button" data-tool="space" title="Space tool"><i class="bi bi-arrows-expand"></i> Space</button>
+            <button class="btn btn-outline-secondary" type="button" data-tool="connect" title="Global connect tool"><i class="bi bi-arrow-right"></i> Connect</button>
+          </div>
+        </div>
+        <div class="card diagram-card">
+          <div class="diagram-chrome-header" id="diagramHeader"></div>
+          <div id="canvas" class="diagram-canvas"></div>
+          <div id="sequencePane" class="sequence-pane d-none">
+            <div class="sequence-source-panel">
+              <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                <div>
+                  <div class="fw-semibold">Web sequence diagram source</div>
+                  <div class="small text-secondary">Use Mermaid-compatible sequence syntax. Imported WebSequenceDiagrams-style text is stored as source and rendered read-only when embedded.</div>
+                </div>
+                <div class="btn-group btn-group-sm" role="group" aria-label="Sequence diagram actions">
+                  <button class="btn btn-outline-primary" id="renderSequenceBtn" type="button"><i class="bi bi-play me-1"></i>Preview</button>
+                  <button class="btn btn-outline-secondary" id="validateSequenceBtn" type="button"><i class="bi bi-check2-circle me-1"></i>Validate</button>
+                  <button class="btn btn-outline-secondary" id="askAiSequenceBtn" type="button"><i class="bi bi-stars me-1"></i>Ask AI</button>
+                  <button class="btn btn-outline-secondary" id="toggleSequenceSourceBtn" type="button" aria-expanded="true" aria-controls="sequenceSourceBody"><i class="bi bi-chevron-up me-1"></i>Collapse source</button>
+                </div>
+              </div>
+              <div class="diagram-validation mb-2 d-none" id="sequenceValidation" aria-live="polite"></div>
+              <div class="sequence-source-body" id="sequenceSourceBody">
+                <textarea class="form-control font-monospace sequence-source" id="sequenceSource" rows="12" spellcheck="false"></textarea>
+              </div>
+            </div>
+            <div class="sequence-preview" id="sequencePreview" aria-live="polite"></div>
+          </div>
+          <div id="flowchartPane" class="sequence-pane d-none">
+            <div class="sequence-source-panel">
+              <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                <div>
+                  <div class="fw-semibold">Flowchart source</div>
+                  <div class="small text-secondary">Use Mermaid flowchart syntax. Supports flowchart LR/TB/RL/BT layouts.</div>
+                </div>
+                <div class="btn-group btn-group-sm" role="group" aria-label="Flowchart actions">
+                  <button class="btn btn-outline-primary" id="renderFlowchartBtn" type="button"><i class="bi bi-play me-1"></i>Preview</button>
+                  <button class="btn btn-outline-secondary" id="validateFlowchartBtn" type="button"><i class="bi bi-check2-circle me-1"></i>Validate</button>
+                  <button class="btn btn-outline-secondary" id="toggleFlowchartVisualBtn" type="button" aria-expanded="false" aria-controls="flowchartVisualBuilder"><i class="bi bi-diagram-3 me-1"></i>Visual editor</button>
+                  <button class="btn btn-outline-secondary" id="askAiFlowchartBtn" type="button"><i class="bi bi-stars me-1"></i>Ask AI</button>
+                  <button class="btn btn-outline-secondary" id="toggleFlowchartSourceBtn" type="button" aria-expanded="true" aria-controls="flowchartSourceBody"><i class="bi bi-chevron-up me-1"></i>Collapse source</button>
+                </div>
+              </div>
+              <div class="diagram-validation mb-2 d-none" id="flowchartValidation" aria-live="polite"></div>
+              <div class="sequence-source-body" id="flowchartSourceBody">
+                <textarea class="form-control font-monospace sequence-source" id="flowchartSource" rows="12" spellcheck="false"></textarea>
+              </div>
+            </div>
+            <div class="flowchart-visual-builder d-none" id="flowchartVisualBuilder">
+              <div class="flowchart-visual-toolbar d-flex flex-wrap align-items-center gap-2 mb-2">
+                <div class="btn-group btn-group-sm" role="group" aria-label="Add flowchart item">
+                  <button class="btn btn-outline-secondary" type="button" data-flowchart-add-node="process"><i class="bi bi-square me-1"></i>Process</button>
+                  <button class="btn btn-outline-secondary" type="button" data-flowchart-add-node="decision"><i class="bi bi-diamond me-1"></i>Decision</button>
+                  <button class="btn btn-outline-secondary" type="button" data-flowchart-add-node="terminator"><i class="bi bi-record-circle me-1"></i>Start/end</button>
+                  <button class="btn btn-outline-secondary" type="button" data-flowchart-add-node="database"><i class="bi bi-database me-1"></i>Database</button>
+                </div>
+                <button class="btn btn-sm btn-outline-primary" type="button" id="flowchartConnectBtn" aria-pressed="false"><i class="bi bi-arrow-right me-1"></i>Click-connect</button>
+                <button class="btn btn-sm btn-outline-secondary" type="button" id="flowchartDeleteSelectedBtn"><i class="bi bi-trash me-1"></i>Delete selected</button>
+                <button class="btn btn-sm btn-outline-secondary" type="button" id="flowchartLoadSourceBtn"><i class="bi bi-arrow-repeat me-1"></i>Load from source</button>
+                <button class="btn btn-sm btn-outline-secondary" type="button" id="flowchartAutoLayoutBtn"><i class="bi bi-grid-3x3-gap me-1"></i>Auto-layout</button>
+                <div class="ms-auto d-flex align-items-center gap-2">
+                  <label class="form-label small mb-0" for="flowchartDirectionInput">Direction</label>
+                  <select class="form-select form-select-sm flowchart-direction-input" id="flowchartDirectionInput">
+                    <option value="LR">Left to right</option>
+                    <option value="TD">Top down</option>
+                    <option value="RL">Right to left</option>
+                    <option value="BT">Bottom up</option>
+                  </select>
+                </div>
+              </div>
+              <div class="flowchart-visual-status small text-secondary mb-2" id="flowchartVisualStatus">Drag boxes to arrange them. Drag a handle to connect boxes, or drag on empty canvas to box-select nodes and connectors. Positions snap to the grid.</div>
+              <div class="flowchart-visual-layout">
+                <div class="flowchart-visual-canvas-wrap" id="flowchartVisualCanvasWrap">
+                  <svg class="flowchart-visual-canvas" id="flowchartVisualCanvas" role="application" aria-label="Flowchart visual editor"></svg>
+                </div>
+                <div class="flowchart-visual-properties border rounded bg-white p-3" id="flowchartVisualProperties">
+                  <div class="fw-semibold mb-2">Visual properties</div>
+                  <div class="text-secondary small" id="flowchartVisualPropertiesEmpty">Select a node or connector to edit it. Drag on empty canvas to box-select several items.</div>
+                  <div id="flowchartNodeProperties" class="d-none">
+                    <label class="form-label small" for="flowchartNodeLabelInput">Node label</label>
+                    <textarea class="form-control form-control-sm mb-2" id="flowchartNodeLabelInput" rows="3"></textarea>
+                    <label class="form-label small" for="flowchartNodeShapeInput">Shape</label>
+                    <select class="form-select form-select-sm mb-2" id="flowchartNodeShapeInput">
+                      <option value="process">Process</option>
+                      <option value="decision">Decision</option>
+                      <option value="terminator">Start/end</option>
+                      <option value="database">Database</option>
+                      <option value="circle">Circle</option>
+                    </select>
+                    <label class="form-label small" for="flowchartNodeIdInput">Mermaid ID</label>
+                    <input class="form-control form-control-sm" id="flowchartNodeIdInput" maxlength="48">
+                    <div class="form-text">IDs are kept short and safe for Mermaid source.</div>
+                  </div>
+                  <div id="flowchartEdgeProperties" class="d-none">
+                    <label class="form-label small" for="flowchartEdgeLabelInput">Connector label</label>
+                    <input class="form-control form-control-sm mb-2" id="flowchartEdgeLabelInput" maxlength="160" placeholder="Optional label">
+                    <label class="form-label small" for="flowchartEdgeStyleInput">Connector style</label>
+                    <select class="form-select form-select-sm" id="flowchartEdgeStyleInput">
+                      <option value="arrow">Arrow</option>
+                      <option value="line">Line</option>
+                      <option value="dotted">Dotted arrow</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+              <div class="form-text mt-2">The visual editor supports a simple Mermaid flowchart subset. More complex Mermaid syntax remains editable in source mode.</div>
+            </div>
+            <div class="sequence-preview" id="flowchartPreview" aria-live="polite"></div>
+          </div>
+          <div class="diagram-chrome-footer" id="diagramFooter"></div>
+        </div>
+      </div>
+      <div class="col-xl-3 d-none" id="diagramSidebar">
+        <div class="card mb-3" data-sidebar-section>
+          <div class="card-header d-flex justify-content-between align-items-center"><span>Properties</span><button class="btn btn-sm btn-outline-primary" id="saveMetaBtn">Save</button></div>
+          <div class="card-body">
+            <label class="form-label" for="nameInput">Name</label><input class="form-control mb-2" id="nameInput">
+            <label class="form-label" for="descriptionInput">Description</label><textarea class="form-control mb-2" id="descriptionInput" rows="3"></textarea>
+            <label class="form-label" for="tagsInput">Tags</label><input class="form-control mb-2" id="tagsInput" placeholder="comma-separated" list="tagSuggestions"><datalist id="tagSuggestions"></datalist><div id="tagChoices" class="tag-selected mb-2"></div><div id="tagSuggestionsMenu" class="tag-picker tag-suggestion-menu mb-2 d-none"></div>
+            <label class="form-label" for="folderInput">Folder</label><select class="form-select mb-2" id="folderInput"><option value="">No folder</option></select>
+            <label class="form-label" for="visibilityInput">Visibility</label>
+            <select class="form-select mb-2" id="visibilityInput">
+              <option value="private">Private to me only</option>
+              <option value="internal">Private internal</option>
+              <option value="public">Public link/embed</option>
+            </select>
+            <div class="small text-secondary" id="embedInfo"></div>
+          </div>
+          <div class="card-footer d-flex justify-content-end">
+            <button class="btn btn-sm btn-outline-danger d-none" id="deleteDiagramBtn" type="button">
+              <i class="bi bi-trash me-1"></i>Delete diagram
+            </button>
+          </div>
+        </div>
+
+        <div class="card mb-3" id="entityLinkCard" data-sidebar-section>
+          <div class="card-header" id="entityLinkCardTitle">Selected element links</div>
+          <div class="card-body">
+            <div class="small text-secondary mb-2" id="selectionInfo">Select an element to link it.</div>
+            <div id="entityLinks" class="mb-2"></div>
+            <form id="entityLinkForm" class="vstack gap-2">
+              <input class="form-control form-control-sm" id="entityLabel" placeholder="Label shown on diagram" required>
+              <input class="form-control form-control-sm" id="entityUrl" placeholder="URL to open" required>
+              <button class="btn btn-sm btn-outline-primary" type="submit">Add link</button>
+            </form>
+          </div>
+        </div>
+
+        <div class="card mb-3" data-sidebar-section>
+          <div class="card-header d-flex justify-content-between align-items-center"><span>Metadata links</span><span class="badge text-bg-secondary" id="metadataLinkCount">0</span></div>
+          <div class="card-body">
+            <div class="small text-secondary mb-2">Links related to this diagram entity, not shown inside the diagram.</div>
+            <div id="metadataLinks" class="mb-3"></div>
+            <form id="metadataLinkForm" class="vstack gap-2">
+              <input class="form-control form-control-sm" id="metadataLabel" placeholder="Label, e.g. Tracker story" required>
+              <input class="form-control form-control-sm" id="metadataUrl" placeholder="https://…" required>
+              <textarea class="form-control form-control-sm" id="metadataNotes" rows="2" placeholder="Notes"></textarea>
+              <button class="btn btn-sm btn-outline-primary" type="submit">Add metadata link</button>
+            </form>
+          </div>
+        </div>
+
+        <div class="card mb-3" data-sidebar-section>
+          <div class="card-header d-flex justify-content-between align-items-center"><span>Sharing</span><span class="badge text-bg-secondary" id="shareCount">0</span></div>
+          <div class="card-body">
+            <div class="small text-secondary mb-2" id="shareHelp">Share private diagrams with named MIDENA users, or send email notifications for public diagrams.</div>
+            <div id="shares" class="mb-3"></div>
+            <form id="shareForm" class="vstack gap-2">
+              <input class="form-control form-control-sm" id="shareIdentifier" placeholder="Username or email" list="userSuggestions" required>
+              <datalist id="userSuggestions"></datalist>
+              <select class="form-select form-select-sm" id="shareRole">
+                <option value="viewer">Viewer</option>
+                <option value="editor">Editor</option>
+              </select>
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="shareNotify" checked>
+                <label class="form-check-label" for="shareNotify">Send email notification</label>
+              </div>
+              <button class="btn btn-sm btn-outline-primary" type="submit">Share diagram</button>
+            </form>
+          </div>
+        </div>
+
+        <div class="card mb-3" data-sidebar-section>
+          <div class="card-header d-flex justify-content-between align-items-center"><span>Comments</span><span class="badge text-bg-secondary" id="commentCount">0</span></div>
+          <div class="card-body">
+            <div class="small text-secondary mb-2" id="commentHelp">Comments can be attached to the selected diagram element.</div>
+            <form id="commentForm" class="mb-3"><textarea class="form-control mb-2" id="commentBody" rows="2" placeholder="Add a comment"></textarea><button class="btn btn-sm btn-outline-primary" type="submit">Comment</button></form>
+            <div id="comments"></div>
+          </div>
+        </div>
+
+        <div class="card" data-sidebar-section>
+          <div class="card-header">Versions</div>
+          <div class="list-group list-group-flush" id="versions"></div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <div class="modal fade" id="importModal" tabindex="-1" aria-labelledby="importModalTitle" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2 class="modal-title h5" id="importModalTitle">Import diagram code</h2>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <p class="text-secondary small mb-2">Paste BPMN XML, web sequence diagram source, or flowchart code to replace the current editor content. Save a new version afterwards to persist it.</p>
+          <textarea class="form-control font-monospace" id="importSource" rows="14" spellcheck="false"></textarea>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+          <button type="button" class="btn btn-primary" id="applyImportBtn"><i class="bi bi-upload me-1"></i>Import into editor</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal fade" id="aiModal" tabindex="-1" aria-labelledby="aiModalTitle" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2 class="modal-title h5" id="aiModalTitle">Ask AI for diagram code</h2>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div class="alert alert-warning d-none" id="aiConfigWarning" role="alert"></div>
+          <p class="text-secondary small mb-3" id="aiModalHelp">Describe the flow in plain language. MIDENA sends your prompt and current source to the configured OpenAI-compatible provider, then inserts the returned diagram code into the editor for preview. Save a new version when you are happy with it.</p>
+          <div class="ai-chat-log border rounded bg-light p-2 mb-3" id="aiChatMessages" aria-live="polite"></div>
+          <form id="aiPromptForm">
+            <label class="form-label" for="aiPrompt">Prompt or follow-up</label>
+            <textarea class="form-control" id="aiPrompt" rows="4" placeholder="Example: Create a customer support escalation flow with happy path, timeout, and manager approval."></textarea>
+          </form>
+        </div>
+        <div class="modal-footer flex-wrap gap-2">
+          <button type="button" class="btn btn-outline-secondary me-auto" id="clearAiChatBtn"><i class="bi bi-arrow-counterclockwise me-1"></i>Start over</button>
+          <button type="button" class="btn btn-outline-primary" id="useAiCodeBtn" disabled><i class="bi bi-box-arrow-in-down me-1"></i>Use latest code</button>
+          <button type="button" class="btn btn-primary" id="sendAiPromptBtn"><i class="bi bi-stars me-1"></i>Ask AI</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal fade" id="driveModal" tabindex="-1" aria-labelledby="driveModalTitle" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2 class="modal-title h5" id="driveModalTitle">Export to Google Drive</h2>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-3">
+            <label class="form-label" for="driveFormat">Format</label>
+            <select class="form-select" id="driveFormat">
+              <option value="svg">SVG</option>
+              <option value="png">PNG</option>
+              <option value="jpg">JPG</option>
+              <option value="pdf">PDF</option>
+              <option value="source">Source code</option>
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label" for="driveFolderId">Google Drive folder ID</label>
+            <input class="form-control" id="driveFolderId" placeholder="Optional; falls back to MIDENA_GOOGLE_DRIVE_DEFAULT_FOLDER_ID">
+          </div>
+          <p class="small text-secondary mb-0">The server uses the Google Workspace credentials configured in the MIDENA environment.</p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+          <button type="button" class="btn btn-primary" id="sendDriveExportBtn"><i class="bi bi-cloud-arrow-up me-1"></i>Export</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal fade" id="embedModal" tabindex="-1" aria-labelledby="embedModalTitle" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2 class="modal-title h5" id="embedModalTitle">Embed diagram</h2>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <p class="text-secondary small mb-2">Use this read-only iframe embed code in another application.</p>
+          <textarea class="form-control font-monospace" id="embedCode" rows="6" readonly></textarea>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+          <button type="button" class="btn btn-primary" id="copyEmbedBtn"><i class="bi bi-clipboard me-1"></i>Copy embed code</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/mosp-ui-config.js"></script>
+  <script src="/vendor/bootstrap/bootstrap.bundle.min.js"></script>
+  <script type="module" src="/mosp-shell.js"></script>
+  <script src="/app.js"></script>
+  <script src="/rendered-diagram-interactions.js"></script>
+  <script src="/pages/diagram.js"></script>
+</body>
+</html>

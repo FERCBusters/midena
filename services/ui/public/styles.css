@@ -1,0 +1,442 @@
+:root { --midena-canvas-min-height: 72vh; }
+body { background: #f7f8fa; }
+.diagram-card { overflow: hidden; }
+.diagram-canvas { min-height: var(--midena-canvas-min-height); background: #fff; }
+.embed-body { margin: 0; background: #fff; overflow: hidden; }
+.embed-canvas { width: 100vw; height: calc(100vh - 72px); min-height: 300px; background: #fff; }
+.diagram-chrome-header, .diagram-chrome-footer { min-height: 32px; padding: .45rem .75rem; font-size: .875rem; color: #495057; background: #f8f9fa; border-color: #dee2e6; white-space: pre-wrap; }
+.diagram-chrome-header { border-bottom: 1px solid #dee2e6; }
+.diagram-chrome-footer { border-top: 1px solid #dee2e6; }
+.path-cell { max-width: 38rem; overflow-wrap: anywhere; word-break: break-word; }
+.djs-palette, .djs-context-pad { font-size: 14px; }
+.bjs-powered-by { display: none; }
+
+/* BPMN editor sizing and linked-entity affordances */
+.diagram-card { height: calc(100vh - 10.5rem); min-height: 720px; display: flex; flex-direction: column; }
+.diagram-canvas { flex: 1 1 auto; height: auto; min-height: 640px; width: 100%; position: relative; border: 1px solid #dee2e6; }
+.diagram-canvas .djs-container, .diagram-canvas .viewport { width: 100% !important; height: 100% !important; }
+.midena-linked-element .djs-visual > :is(rect, circle, ellipse, polygon, path) { stroke: var(--bs-primary, #6f42c1) !important; stroke-width: 3px !important; }
+.midena-linked-element .djs-visual { cursor: pointer; }
+.midena-entity-link-overlay { display: inline-flex; align-items: center; max-width: 14rem; padding: .15rem .45rem; border-radius: 999px; background: var(--bs-primary-bg-subtle, #e7dcff); border: 1px solid var(--bs-primary, #6f42c1); color: var(--bs-primary-text-emphasis, #3d2470); font-size: .75rem; font-weight: 600; line-height: 1.1; white-space: nowrap; text-decoration: none; box-shadow: 0 1px 3px rgba(0,0,0,.15); pointer-events: auto; }
+.midena-entity-link-overlay::after { content: "↗"; margin-left: .3rem; font-size: .7rem; }
+.midena-entity-link-overlay:hover { text-decoration: underline; }
+.midena-commented-element .djs-visual > :is(rect, circle, ellipse, polygon, path) { filter: drop-shadow(0 0 4px rgba(255, 193, 7, .85)); }
+.midena-comment-overlay { position: relative; display: inline-flex; align-items: center; padding: .12rem .4rem; border-radius: .35rem; border: 1px solid #b58100; background: #fff3cd; color: #664d03; font-size: .72rem; font-weight: 600; line-height: 1.1; white-space: nowrap; box-shadow: 0 1px 3px rgba(0,0,0,.18); pointer-events: auto; }
+.midena-comment-overlay::before { content: "💬"; margin-right: .25rem; }
+.midena-comment-overlay:hover, .midena-comment-overlay:focus { background: #ffe69c; }
+.midena-comment-bubble { position: absolute; z-index: 50; top: calc(100% + .45rem); right: 0; display: none; width: max-content; min-width: 14rem; max-width: 24rem; padding: .55rem .65rem; border-radius: .5rem; border: 1px solid #b58100; background: #fff8db; color: #664d03; box-shadow: 0 .35rem .9rem rgba(0,0,0,.22); white-space: normal; text-align: left; font-size: .82rem; line-height: 1.25; font-weight: 400; }
+.midena-comment-bubble::before { content: ""; position: absolute; top: -.42rem; right: .8rem; width: .7rem; height: .7rem; transform: rotate(45deg); border-left: 1px solid #b58100; border-top: 1px solid #b58100; background: #fff8db; }
+.midena-comment-overlay:hover .midena-comment-bubble, .midena-comment-overlay:focus .midena-comment-bubble, .midena-comment-overlay:focus-within .midena-comment-bubble { display: block; }
+.midena-comment-bubble-item { display: block; padding-bottom: .45rem; margin-bottom: .45rem; border-bottom: 1px solid rgba(181,129,0,.25); }
+.midena-comment-bubble-item:last-child { padding-bottom: 0; margin-bottom: 0; border-bottom: 0; }
+.midena-comment-bubble-item strong, .midena-comment-bubble-item span { display: block; }
+.midena-comment-bubble-more { display: block; margin-top: .35rem; font-size: .75rem; font-weight: 600; }
+.comment-card.midena-comment-card-flash { animation: midenaCommentFlash 1.55s ease-out; }
+@keyframes midenaCommentFlash { 0% { border-color: #b58100; box-shadow: 0 0 0 .28rem rgba(255,193,7,.45); } 65% { border-color: #b58100; box-shadow: 0 0 0 .18rem rgba(255,193,7,.22); } 100% { box-shadow: 0 0 0 0 rgba(255,193,7,0); } }
+.folder-tree { list-style: none; margin: 0 0 0 .75rem; padding-left: .75rem; border-left: 1px dashed #d7dce2; }
+.folder-tree > li { margin: .25rem 0; }
+.folder-tree-node { display: flex; align-items: center; gap: .35rem; padding: .35rem .45rem; border: 1px solid transparent; border-radius: .4rem; background: #fff; }
+.folder-tree-node:hover { border-color: #d7dce2; background: #f8f9fa; }
+.folder-tree-node.dragging { opacity: .55; }
+.folder-tree-node.drag-over, .folder-root-drop.drag-over { border-color: var(--bs-primary); background: var(--bs-primary-bg-subtle, #efe7ff); }
+.folder-tree-grip { color: #6c757d; cursor: grab; }
+.folder-root-drop { border: 1px dashed #cbd3dc; border-radius: .5rem; color: #6c757d; padding: .55rem .75rem; background: #f8f9fa; }
+
+/* Tag search and sequence diagram support */
+.tag-cloud .btn, #selectedTags .btn { max-width: 18rem; overflow: hidden; text-overflow: ellipsis; }
+.nav-tabs .nav-link { display: inline-flex; align-items: center; gap: .25rem; }
+
+
+/* Web sequence diagrams need to grow beyond the fixed BPMN canvas height. */
+.diagram-card.sequence-diagram-card { height: auto; min-height: 0; overflow: visible; }
+.diagram-card.sequence-diagram-card .diagram-chrome-header,
+.diagram-card.sequence-diagram-card .diagram-chrome-footer { flex: 0 0 auto; }
+.diagram-card.sequence-diagram-card .sequence-pane { min-height: calc(100vh - 9rem); }
+.sequence-pane { flex: 1 1 auto; min-height: calc(100vh - 11rem); background: #fff; display: grid; grid-template-rows: auto auto; }
+.sequence-source-panel { padding: .85rem; border-bottom: 1px solid #dee2e6; background: #f8f9fa; }
+.sequence-source { min-height: 10rem; resize: vertical; overflow: hidden; }
+.sequence-preview { min-height: 72vh; padding: 1.25rem; overflow: auto; background: #fff; display: block; }
+.sequence-preview svg, .sequence-embed-canvas svg { max-width: none; height: auto; }
+.sequence-preview .alert { max-width: 64rem; }
+.diagram-validation pre { white-space: pre-wrap; word-break: break-word; }
+
+/* Flowchart diagrams use the same styling as sequence diagrams */
+.diagram-card.flowchart-diagram-card { height: auto; min-height: 0; overflow: visible; }
+.diagram-card.flowchart-diagram-card .diagram-chrome-header,
+.diagram-card.flowchart-diagram-card .diagram-chrome-footer { flex: 0 0 auto; }
+.diagram-card.flowchart-diagram-card .sequence-pane { min-height: calc(100vh - 9rem); }
+
+.tag-picker { display: flex; flex-wrap: wrap; gap: .35rem; }
+.tag-choice {
+  --tag-color: #6f42c1;
+  border: 1px solid var(--tag-color);
+  background: color-mix(in srgb, var(--tag-color) 12%, #fff);
+  color: #212529;
+  border-radius: 999px;
+  padding: .15rem .55rem;
+  font-size: .8125rem;
+  line-height: 1.4;
+}
+.tag-choice:hover, .tag-choice:focus { background: var(--tag-color); color: #fff; }
+.tag-selected { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; }
+.tag-selected-pill { margin-right: 0 !important; }
+.tag-remove {
+  border: 0;
+  background: transparent;
+  color: #6c757d;
+  margin-left: -.2rem;
+  margin-right: .35rem;
+  padding: 0 .1rem;
+  line-height: 1;
+}
+.tag-remove:hover, .tag-remove:focus { color: #dc3545; }
+.tag-suggestion-menu { padding-top: .1rem; }
+
+.diagram-sidebar { transition: opacity .15s ease-in-out; }
+.sidebar-section-toggle { white-space: nowrap; }
+.sidebar-collapsed .diagram-card { min-height: calc(100vh - 10rem); }
+.sidebar-expanded .diagram-card { min-height: calc(100vh - 10rem); }
+@media (min-width: 1200px) {
+  .sidebar-collapsed #editorCol { flex: 0 0 auto; width: 100%; }
+}
+
+/* Diagram preview focus mode */
+.editor-collapsed #bpmnToolbar,
+.editor-collapsed .sequence-source-panel,
+.editor-collapsed .djs-palette,
+.editor-collapsed .djs-context-pad,
+.editor-collapsed .bjs-powered-by {
+  display: none !important;
+}
+
+.editor-collapsed .diagram-card:not(.sequence-diagram-card):not(.flowchart-diagram-card) {
+  height: calc(100vh - 8rem);
+  min-height: calc(100vh - 8rem);
+}
+
+.editor-collapsed .sequence-diagram-card,
+.editor-collapsed .flowchart-diagram-card {
+  height: auto;
+  min-height: calc(100vh - 8rem);
+  overflow: visible;
+}
+
+.editor-collapsed .diagram-canvas {
+  min-height: calc(100vh - 11rem);
+}
+
+.editor-collapsed .sequence-pane {
+  min-height: calc(100vh - 8rem);
+  grid-template-rows: 1fr;
+}
+
+.editor-collapsed .sequence-preview {
+  min-height: calc(100vh - 11rem);
+}
+
+
+.tag-filter-pill { border-width: 1px; font-weight: 500; }
+.tag-filter-pill:hover, .tag-filter-pill:focus { filter: brightness(.96); }
+.tag-filter-selected { box-shadow: 0 0 0 .16rem rgba(111, 66, 193, .24); }
+
+.tag-link-pill { text-decoration: none; display: inline-flex; align-items: center; }
+.tag-link-pill:hover, .tag-link-pill:focus { text-decoration: underline; filter: brightness(.96); }
+
+/* Front-page folder browser */
+.folder-browser-breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .35rem;
+  font-size: .925rem;
+}
+.folder-browser-crumb {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: .2rem .55rem;
+  text-decoration: none;
+  color: var(--bs-primary-text-emphasis, #3d2470);
+  background: var(--bs-primary-bg-subtle, #efe7ff);
+  border: 1px solid rgba(111, 66, 193, .18);
+}
+.folder-browser-crumb:hover,
+.folder-browser-crumb:focus {
+  text-decoration: underline;
+  border-color: rgba(111, 66, 193, .38);
+}
+.folder-browser-crumb.active {
+  font-weight: 700;
+  color: #212529;
+  background: #fff;
+}
+.folder-browser-separator { color: #6c757d; }
+.folder-browser-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: .75rem;
+}
+.folder-browser-tile {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas: "icon title" "icon description";
+  gap: .1rem .65rem;
+  align-items: center;
+  padding: .75rem;
+  border: 1px solid #d7dce2;
+  border-radius: .75rem;
+  background: #fff;
+  color: inherit;
+  text-decoration: none;
+}
+.folder-browser-tile:hover,
+.folder-browser-tile:focus {
+  border-color: var(--bs-primary, #6f42c1);
+  background: var(--bs-primary-bg-subtle, #efe7ff);
+  text-decoration: none;
+}
+.folder-browser-icon { grid-area: icon; color: var(--bs-primary, #6f42c1); font-size: 1.35rem; }
+.folder-browser-title { grid-area: title; font-weight: 700; }
+.folder-browser-description { grid-area: description; color: #6c757d; font-size: .8125rem; overflow-wrap: anywhere; }
+
+/* Interactive rendered Mermaid diagrams (flowcharts and sequence diagrams) */
+.midena-rendered-overlay-layer { pointer-events: none; }
+.midena-rendered-target-hit {
+  fill: rgba(111, 66, 193, .025);
+  stroke: transparent;
+  stroke-width: 2px;
+  stroke-dasharray: 6 4;
+  cursor: pointer;
+  pointer-events: all;
+}
+.midena-rendered-target-hit:hover,
+.midena-rendered-target-hit:focus,
+.midena-rendered-target-hit.selected {
+  fill: rgba(111, 66, 193, .08);
+  stroke: var(--bs-primary, #6f42c1);
+}
+.midena-rendered-target-hit.linked:not(.selected) { stroke: var(--bs-primary, #6f42c1); }
+.midena-rendered-target-hit.commented:not(.selected) { stroke: #b58100; }
+.midena-rendered-target-hit.linked.commented:not(.selected) { stroke: #6f42c1; }
+.midena-rendered-link-pill,
+.midena-rendered-comment-pill {
+  pointer-events: all;
+  cursor: pointer;
+  text-decoration: none;
+}
+.midena-rendered-link-pill rect {
+  fill: var(--bs-primary-bg-subtle, #e7dcff);
+  stroke: var(--bs-primary, #6f42c1);
+  stroke-width: 1px;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,.18));
+}
+.midena-rendered-link-pill text {
+  fill: var(--bs-primary-text-emphasis, #3d2470);
+  font-family: Arial, sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  pointer-events: none;
+}
+.midena-rendered-link-pill:hover text,
+.midena-rendered-link-pill:focus text { text-decoration: underline; }
+.midena-rendered-comment-pill rect {
+  fill: #fff3cd;
+  stroke: #b58100;
+  stroke-width: 1px;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,.18));
+}
+.midena-rendered-comment-pill text {
+  fill: #664d03;
+  font-family: Arial, sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  pointer-events: none;
+}
+.midena-rendered-comment-pill:hover rect,
+.midena-rendered-comment-pill:focus rect { fill: #ffe69c; }
+
+/* Global diagram theming */
+:root {
+  --midena-diagram-fill: #ffffff;
+  --midena-diagram-stroke: #344054;
+  --midena-diagram-text: #1f2937;
+  --midena-diagram-connector: #667085;
+  --midena-diagram-border-width: 1.5px;
+  --midena-diagram-connector-width: 1.8px;
+  --midena-diagram-font-family: Arial, sans-serif;
+  --midena-diagram-font-size: 14px;
+}
+.diagram-theme-bpmn #canvas .djs-shape .djs-visual > :is(rect, circle, ellipse, polygon) {
+  fill: var(--midena-diagram-fill) !important;
+  stroke: var(--midena-diagram-stroke) !important;
+  stroke-width: var(--midena-diagram-border-width) !important;
+}
+.diagram-theme-bpmn #canvas .djs-shape .djs-visual > path {
+  stroke: var(--midena-diagram-stroke) !important;
+  stroke-width: var(--midena-diagram-border-width) !important;
+}
+.diagram-theme-bpmn #canvas .djs-connection .djs-visual > :is(path, polyline, line) {
+  stroke: var(--midena-diagram-connector) !important;
+  stroke-width: var(--midena-diagram-connector-width) !important;
+}
+.diagram-theme-bpmn #canvas text,
+.diagram-theme-bpmn #canvas .djs-label {
+  fill: var(--midena-diagram-text) !important;
+  color: var(--midena-diagram-text) !important;
+  font-family: var(--midena-diagram-font-family) !important;
+  font-size: var(--midena-diagram-font-size) !important;
+}
+.diagram-theme-bpmn #canvas marker path,
+.diagram-theme-bpmn #canvas marker polygon {
+  fill: var(--midena-diagram-connector) !important;
+  stroke: var(--midena-diagram-connector) !important;
+}
+/* The BPMN context pad is positioned dynamically so it avoids nearby shapes. */
+.sequence-source-body.d-none { display: none !important; }
+.source-panel-collapsed .sequence-source-panel { border-bottom-color: #eef0f3; }
+
+/* Optional AI diagram generation chat */
+.ai-chat-log {
+  min-height: 12rem;
+  max-height: 34rem;
+  overflow: auto;
+}
+.ai-chat-message {
+  border: 1px solid #dee2e6;
+  border-radius: .65rem;
+  padding: .65rem .75rem;
+  background: #fff;
+}
+.ai-chat-user {
+  margin-left: 8%;
+  border-color: var(--bs-primary-border-subtle, #b6d4fe);
+  background: var(--bs-primary-bg-subtle, #cfe2ff);
+}
+.ai-chat-assistant {
+  margin-right: 8%;
+}
+.ai-code-block {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 24rem;
+  overflow: auto;
+  padding: .75rem;
+  border-radius: .5rem;
+  background: #212529;
+  color: #f8f9fa;
+}
+
+/* Mermaid flowchart visual editor */
+.flowchart-visual-builder {
+  padding: .85rem;
+  border-bottom: 1px solid #dee2e6;
+  background: #f8f9fa;
+}
+.flowchart-visual-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 18rem;
+  gap: .85rem;
+  align-items: stretch;
+}
+.flowchart-visual-canvas-wrap {
+  min-height: 520px;
+  border: 1px solid #ced4da;
+  border-radius: .65rem;
+  overflow: hidden;
+  background-color: #fff;
+  background-image:
+    linear-gradient(rgba(148, 163, 184, .16) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, .16) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+.flowchart-visual-canvas {
+  width: 100%;
+  min-height: 520px;
+  display: block;
+  touch-action: none;
+  user-select: none;
+}
+.flowchart-visual-node { cursor: grab; }
+.flowchart-visual-node.dragging { cursor: grabbing; }
+.flowchart-visual-node-shape {
+  fill: var(--midena-diagram-fill, #fff);
+  stroke: var(--midena-diagram-stroke, #2563eb);
+  stroke-width: var(--midena-diagram-border-width, 1.5px);
+  filter: drop-shadow(0 2px 3px rgba(15, 23, 42, .14));
+}
+.flowchart-visual-node.selected .flowchart-visual-node-shape {
+  stroke: var(--bs-primary, #6f42c1);
+  stroke-width: calc(var(--midena-diagram-border-width, 1.5px) + 1.4px);
+}
+.flowchart-visual-node.pending-connect .flowchart-visual-node-shape,
+.flowchart-visual-node.connect-target .flowchart-visual-node-shape {
+  stroke: #198754;
+  stroke-width: calc(var(--midena-diagram-border-width, 1.5px) + 1.4px);
+}
+.flowchart-visual-node text {
+  fill: var(--midena-diagram-text, #111827);
+  font-family: var(--midena-diagram-font-family, Arial, sans-serif);
+  font-size: var(--midena-diagram-font-size, 14px);
+  pointer-events: none;
+}
+.flowchart-visual-connect-handle {
+  fill: #fff;
+  stroke: var(--bs-primary, #6f42c1);
+  stroke-width: 2px;
+  cursor: crosshair;
+}
+.flowchart-visual-node:hover .flowchart-visual-connect-handle,
+.flowchart-visual-node.selected .flowchart-visual-connect-handle {
+  fill: var(--bs-primary, #6f42c1);
+}
+.flowchart-visual-connection-preview path {
+  fill: none;
+  stroke: #198754;
+  stroke-width: calc(var(--midena-diagram-connector-width, 1.8px) + 1px);
+  stroke-dasharray: 8 5;
+  pointer-events: none;
+}
+.flowchart-visual-edge path {
+  fill: none;
+  stroke: var(--midena-diagram-connector, #64748b);
+  stroke-width: var(--midena-diagram-connector-width, 1.8px);
+  cursor: pointer;
+}
+.flowchart-visual-edge .flowchart-visual-edge-hit {
+  stroke: transparent;
+  stroke-width: 18px;
+  pointer-events: stroke;
+}
+.flowchart-visual-edge.selected path:not(.flowchart-visual-edge-hit) {
+  stroke: var(--bs-primary, #6f42c1);
+  stroke-width: calc(var(--midena-diagram-connector-width, 1.8px) + 1.4px);
+}
+.flowchart-visual-edge text {
+  fill: var(--midena-diagram-text, #111827);
+  font-family: var(--midena-diagram-font-family, Arial, sans-serif);
+  font-size: 12px;
+  paint-order: stroke;
+  stroke: #fff;
+  stroke-width: 4px;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+.flowchart-visual-marquee {
+  fill: url(#flowchartVisualMarqueeHatch);
+  stroke: var(--bs-primary, #6f42c1);
+  stroke-width: 1.4px;
+  stroke-dasharray: 6 4;
+  pointer-events: none;
+}
+.flowchart-visual-marquee-hatch-line {
+  stroke: var(--bs-primary, #6f42c1);
+  stroke-width: 1px;
+  opacity: .35;
+}
+.flowchart-visual-properties { min-height: 520px; }
+.flowchart-direction-input { min-width: 9.5rem; }
+@media (max-width: 991.98px) {
+  .flowchart-visual-layout { grid-template-columns: 1fr; }
+  .flowchart-visual-properties { min-height: 0; }
+}
+.editor-collapsed .flowchart-visual-builder { display: none !important; }

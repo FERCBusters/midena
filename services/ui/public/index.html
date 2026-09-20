@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MIDENA · Diagrams</title>
+  <link rel="icon" href="/favicon.svg">
+  <link rel="stylesheet" href="/vendor/bootstrap/bootstrap.min.css">
+  <link rel="stylesheet" href="/vendor/bootstrap-icons/bootstrap-icons.min.css">
+  <link rel="stylesheet" href="/vendor/mosp-design-system/styles.css">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="navbar"></div>
+  <main class="container-fluid py-3">
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+      <div>
+        <h1 class="h3 mb-1">Diagrams</h1>
+        <p class="text-secondary mb-0">Search, organise and open BPMN, web sequence, and flowchart diagrams stored in MIDENA.</p>
+      </div>
+      <button class="btn btn-primary" id="newDiagramBtn"><i class="bi bi-plus-lg me-1"></i>New diagram</button>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-header d-flex justify-content-between align-items-center gap-2">
+        <div>
+          <span class="fw-semibold">Search filters</span>
+          <div class="small text-secondary">Filter by text, folder, type, visibility and tags.</div>
+        </div>
+        <button class="btn btn-sm btn-outline-secondary" type="button" id="searchFiltersToggle" data-bs-toggle="collapse" data-bs-target="#searchFiltersBody" aria-expanded="false" aria-controls="searchFiltersBody">
+          <i class="bi bi-chevron-down me-1"></i><span>Expand</span>
+        </button>
+      </div>
+      <div id="searchFiltersBody" class="collapse">
+        <div class="card-body">
+          <form id="searchForm" class="row g-2 align-items-end">
+            <div class="col-md-4">
+              <label for="q" class="form-label">Search</label>
+              <input id="q" class="form-control" placeholder="Name, description or tag">
+            </div>
+            <div class="col-md-3">
+              <label for="folderFilter" class="form-label">Folder</label>
+              <select id="folderFilter" class="form-select"><option value="">All folders</option></select>
+            </div>
+            <div class="col-md-2">
+              <label for="typeFilter" class="form-label">Type</label>
+              <select id="typeFilter" class="form-select"><option value="">All</option><option value="bpmn">BPMN</option><option value="sequence">Web sequence</option><option value="flowchart">Flowchart</option></select>
+            </div>
+            <div class="col-md-2">
+              <label for="visibilityFilter" class="form-label">Visibility</label>
+              <select id="visibilityFilter" class="form-select"><option value="">All</option><option value="private">Private to me</option><option value="internal">Private internal</option><option value="public">Public</option></select>
+            </div>
+            <div class="col-md-1 d-grid">
+              <button class="btn btn-outline-primary" type="submit"><i class="bi bi-search"></i></button>
+            </div>
+          </form>
+          <div class="mt-3">
+            <div class="small text-secondary mb-1">Tags</div>
+            <div id="selectedTags" class="d-flex flex-wrap gap-1 mb-2"></div>
+            <div id="tagCloud" class="tag-cloud"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card mb-3" id="folderBrowserCard">
+      <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <div>
+          <span class="fw-semibold">Browse folders</span>
+          <div class="small text-secondary">Enter a folder to see its diagrams and child folders.</div>
+        </div>
+        <a class="btn btn-sm btn-outline-secondary" href="/folders.html"><i class="bi bi-diagram-3 me-1"></i>Manage folders</a>
+      </div>
+      <div class="card-body">
+        <nav id="folderBreadcrumb" class="folder-browser-breadcrumb mb-3" aria-label="Folder path"></nav>
+        <div id="folderChildren" class="folder-browser-grid"></div>
+      </div>
+    </div>
+
+    <div class="table-responsive card">
+      <table class="table table-hover align-middle mb-0" data-sortable>
+        <thead><tr><th>Name</th><th>Folder</th><th>Type</th><th>Version</th><th>Visibility</th><th>Lock</th><th>Updated</th><th class="text-end" data-nosort>Actions</th></tr></thead>
+        <tbody id="diagramRows"><tr><td colspan="8" class="text-secondary p-4">Loading…</td></tr></tbody>
+      </table>
+      <div class="card-footer d-flex justify-content-between align-items-center"><span id="pagerInfo" class="text-secondary small"></span><div class="btn-group"><button id="prevPage" class="btn btn-outline-secondary btn-sm">Previous</button><button id="nextPage" class="btn btn-outline-secondary btn-sm">Next</button></div></div>
+    </div>
+  </main>
+
+  <div class="modal fade" id="diagramModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+      <form class="modal-content" id="diagramForm">
+        <div class="modal-header"><h2 class="modal-title h5">New diagram</h2><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+        <div class="modal-body">
+          <div class="row g-3">
+            <div class="col-md-8"><label class="form-label" for="diagramName">Name</label><input class="form-control" id="diagramName" required maxlength="240"></div>
+            <div class="col-md-4"><label class="form-label" for="diagramType">Type</label>              <select class="form-select" id="diagramType"><option value="bpmn">BPMN</option><option value="sequence">Web sequence diagram</option><option value="flowchart">Flowchart</option></select></div>
+            <div class="col-md-6"><label class="form-label" for="diagramFolder">Folder</label><select class="form-select" id="diagramFolder"><option value="">No folder</option></select></div>
+            <div class="col-md-6"><label class="form-label" for="diagramTags">Tags</label><input class="form-control" id="diagramTags" placeholder="comma-separated" list="tagSuggestions"><datalist id="tagSuggestions"></datalist><div id="diagramTagChoices" class="tag-selected mt-2"></div><div id="diagramTagSuggestionsMenu" class="tag-picker tag-suggestion-menu mt-2 d-none"></div></div>
+            <div class="col-12"><label class="form-label" for="diagramDescription">Description</label><textarea class="form-control" id="diagramDescription" rows="2"></textarea></div>
+            <div class="col-12">
+              <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-1">
+                <label class="form-label mb-0" for="diagramImportCode">Import code</label>
+                <button class="btn btn-sm btn-outline-secondary" id="newDiagramAskAiBtn" type="button" data-bs-toggle="collapse" data-bs-target="#newDiagramAiBody" aria-expanded="false" aria-controls="newDiagramAiBody"><i class="bi bi-stars me-1"></i>Ask AI</button>
+              </div>
+              <textarea class="form-control font-monospace" id="diagramImportCode" rows="10" placeholder="Paste BPMN XML, web sequence diagram code, or flowchart code here. Leave blank to start from a default template."></textarea>
+              <div class="form-text">For web sequence diagrams and flowcharts, MIDENA renders Mermaid-compatible syntax. AI generation is optional and fills this import field without saving until you create the diagram.</div>
+              <div class="collapse mt-3" id="newDiagramAiBody">
+                <div class="border rounded bg-light p-3">
+                  <div class="alert alert-warning d-none" id="newDiagramAiConfigWarning" role="alert"></div>
+                  <div class="small text-secondary mb-2">Describe the diagram in plain language. You can ask follow-up questions; each AI response replaces the import code above.</div>
+                  <div class="ai-chat-log border rounded bg-white p-2 mb-2" id="newDiagramAiChatMessages" aria-live="polite"></div>
+                  <label class="form-label" for="newDiagramAiPrompt">Prompt or follow-up</label>
+                  <textarea class="form-control" id="newDiagramAiPrompt" rows="3" placeholder="Example: Create a customer support escalation flow with approval and rejected paths."></textarea>
+                  <div class="d-flex flex-wrap gap-2 mt-2">
+                    <button class="btn btn-sm btn-outline-secondary me-auto" id="newDiagramClearAiChatBtn" type="button"><i class="bi bi-arrow-counterclockwise me-1"></i>Start over</button>
+                    <button class="btn btn-sm btn-outline-primary" id="newDiagramUseAiCodeBtn" type="button" disabled><i class="bi bi-box-arrow-in-down me-1"></i>Use latest code</button>
+                    <button class="btn btn-sm btn-primary" id="newDiagramSendAiPromptBtn" type="button"><i class="bi bi-stars me-1"></i>Ask AI</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="col-12"><label class="form-label" for="diagramVisibility">Visibility</label><select class="form-select" id="diagramVisibility"><option value="private">Private to me only</option><option value="internal">Private internal</option><option value="public">Public link/embed</option></select><div class="form-text">Private internal is visible to authenticated MIDENA users, but is not public or embeddable.</div></div>
+          </div>
+        </div>
+        <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary" type="submit">Create</button></div>
+      </form>
+    </div>
+  </div>
+
+  <script src="/mosp-ui-config.js"></script>
+  <script src="/vendor/bootstrap/bootstrap.bundle.min.js"></script>
+  <script type="module" src="/mosp-shell.js"></script>
+  <script src="/app.js"></script>
+  <script src="/pages/index.js"></script>
+</body>
+</html>

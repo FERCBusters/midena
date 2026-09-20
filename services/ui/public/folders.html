@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MIDENA · Folders</title>
+  <link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/vendor/bootstrap/bootstrap.min.css"><link rel="stylesheet" href="/vendor/bootstrap-icons/bootstrap-icons.min.css"><link rel="stylesheet" href="/vendor/mosp-design-system/styles.css"><link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="navbar"></div>
+  <main class="container py-3">
+    <div class="d-flex justify-content-between align-items-center mb-3"><div><h1 class="h3 mb-1">Folders</h1><p class="text-secondary mb-0">Organise diagrams into a navigable folder hierarchy.</p></div><button class="btn btn-primary" id="newFolderBtn"><i class="bi bi-folder-plus me-1"></i>New folder</button></div>
+    <div class="row g-3">
+      <div class="col-lg-5">
+        <div class="card h-100">
+          <div class="card-header d-flex justify-content-between align-items-center"><span>Hierarchy</span><span class="small text-secondary">Drag folders to re-parent</span></div>
+          <div class="card-body">
+            <div class="folder-root-drop mb-2" data-root-drop="true">Drop here to move to top level</div>
+            <div id="folderTree" class="folder-tree-wrap"></div>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-7">
+        <div class="card"><div class="table-responsive"><table class="table align-middle mb-0"><thead><tr><th>Name</th><th>Parent</th><th>Description</th><th class="text-end">Actions</th></tr></thead><tbody id="folderRows"></tbody></table></div></div>
+      </div>
+    </div>
+  </main>
+  <div class="modal fade" id="folderModal" tabindex="-1" aria-hidden="true"><div class="modal-dialog"><form class="modal-content" id="folderForm"><div class="modal-header"><h2 class="modal-title h5" id="folderModalTitle">Folder</h2><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div><div class="modal-body"><input type="hidden" id="folderId"><div class="mb-3"><label class="form-label" for="folderName">Name</label><input class="form-control" id="folderName" required></div><div class="mb-3"><label class="form-label" for="parentId">Parent</label><select class="form-select" id="parentId"><option value="">No parent</option></select></div><div class="mb-3"><label class="form-label" for="folderDescription">Description</label><textarea class="form-control" id="folderDescription" rows="3"></textarea></div></div><div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary" type="submit">Save</button></div></form></div></div>
+  <script src="/mosp-ui-config.js"></script><script src="/vendor/bootstrap/bootstrap.bundle.min.js"></script><script type="module" src="/mosp-shell.js"></script><script src="/app.js"></script><script src="/pages/folders.js"></script>
+</body>
+</html>

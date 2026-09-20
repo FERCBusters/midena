@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MIDENA · Account</title>
+  <link rel="icon" href="/favicon.svg">
+  <link rel="stylesheet" href="/vendor/bootstrap/bootstrap.min.css">
+  <link rel="stylesheet" href="/vendor/bootstrap-icons/bootstrap-icons.min.css">
+  <link rel="stylesheet" href="/vendor/mosp-design-system/styles.css">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="navbar"></div>
+  <main class="container py-3">
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+      <div>
+        <h1 class="h3 mb-1">Account</h1>
+        <p class="text-secondary mb-0">Profile, preferences, theme and shortcuts.</p>
+      </div>
+    </div>
+
+    <ul class="nav nav-tabs mb-3" id="accountTabs" role="tablist">
+      <li class="nav-item" role="presentation"><button class="nav-link active" id="profile-tab" data-bs-toggle="tab" data-bs-target="#profilePane" type="button" role="tab" aria-controls="profilePane" aria-selected="true"><i class="bi bi-person me-1"></i>Profile</button></li>
+      <li class="nav-item" role="presentation"><button class="nav-link" id="preferences-tab" data-bs-toggle="tab" data-bs-target="#preferencesPane" type="button" role="tab" aria-controls="preferencesPane" aria-selected="false"><i class="bi bi-sliders me-1"></i>Preferences</button></li>
+      <li class="nav-item" role="presentation"><button class="nav-link" id="shortcuts-tab" data-bs-toggle="tab" data-bs-target="#shortcutsPane" type="button" role="tab" aria-controls="shortcutsPane" aria-selected="false"><i class="bi bi-bookmark-star me-1"></i>Shortcuts</button></li>
+    </ul>
+
+    <div class="tab-content">
+      <section class="tab-pane fade show active" id="profilePane" role="tabpanel" aria-labelledby="profile-tab" tabindex="0">
+        <div class="card">
+          <div class="card-header">
+            <div class="fw-bold">Profile</div>
+            <div class="small text-secondary">Your MIDENA account details and primary email address.</div>
+          </div>
+          <div class="card-body">
+            <dl class="row mb-3">
+              <dt class="col-sm-3">Username</dt><dd class="col-sm-9" id="username">—</dd>
+              <dt class="col-sm-3">Role</dt><dd class="col-sm-9" id="role">—</dd>
+              <dt class="col-sm-3">Email</dt><dd class="col-sm-9" id="email">—</dd>
+              <dt class="col-sm-3">Sign-in method</dt><dd class="col-sm-9" id="authMethod">—</dd>
+            </dl>
+            <form id="emailForm" class="row g-2 align-items-end">
+              <div class="col-12 col-lg-8">
+                <label class="form-label small text-secondary mb-1" for="emailInput">Primary email</label>
+                <input id="emailInput" class="form-control" type="email" placeholder="Primary email">
+              </div>
+              <div class="col-12 col-lg-4 d-grid"><button class="btn btn-primary">Save email</button></div>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <section class="tab-pane fade" id="preferencesPane" role="tabpanel" aria-labelledby="preferences-tab" tabindex="0">
+        <div class="card">
+          <div class="card-header">
+            <div class="fw-bold">Preferences</div>
+            <div class="small text-secondary">Pick a theme and browser/UI preferences using the same MOSP Design System pattern as KEEN and OSPMAE.</div>
+          </div>
+          <div class="card-body">
+            <div class="row g-3">
+              <div class="col-12 col-lg-6">
+                <label class="form-label small text-secondary mb-1" for="prefTheme">Theme</label>
+                <select id="prefTheme" class="form-select"></select>
+                <div class="form-text">Stored in your browser and applied across MIDENA pages.</div>
+              </div>
+              <div class="col-12 col-lg-6">
+                <label class="form-label small text-secondary mb-1" for="defaultStartPage">Default start page</label>
+                <select id="defaultStartPage" class="form-select"></select>
+              </div>
+              <div class="col-12 col-lg-6">
+                <label class="form-label small mb-1">Sticky filters &amp; visuals</label>
+                <div class="form-check form-switch">
+                  <input id="prefSticky" class="form-check-input" type="checkbox">
+                  <label class="form-check-label" for="prefSticky">Keep key panels pinned while scrolling</label>
+                </div>
+              </div>
+              <div class="col-12 col-lg-6">
+                <label class="form-label small mb-1">Auto-apply</label>
+                <div class="form-check form-switch">
+                  <input id="prefAutoApply" class="form-check-input" type="checkbox">
+                  <label class="form-check-label" for="prefAutoApply">Automatically refresh results after filter changes</label>
+                </div>
+              </div>
+              <div class="col-12 col-lg-6">
+                <label class="form-label small mb-1">Diagram source panels</label>
+                <div class="form-check form-switch">
+                  <input id="prefDiagramSourceCollapsed" class="form-check-input" type="checkbox">
+                  <label class="form-check-label" for="prefDiagramSourceCollapsed">Open WSD/Flowchart source panels collapsed by default</label>
+                </div>
+              </div>
+              <div class="col-12 col-lg-6">
+                <label class="form-label small mb-1">Diagram sidebar</label>
+                <div class="form-check form-switch">
+                  <input id="prefDiagramSidebarCollapsed" class="form-check-input" type="checkbox">
+                  <label class="form-check-label" for="prefDiagramSidebarCollapsed">Open the diagram sidebar collapsed by default</label>
+                </div>
+              </div>
+              <div class="col-12 d-flex justify-content-end">
+                <button class="btn btn-primary" id="savePreferencesBtn" type="button"><i class="bi bi-check2 me-1"></i>Save preferences</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="tab-pane fade" id="shortcutsPane" role="tabpanel" aria-labelledby="shortcuts-tab" tabindex="0">
+        <div class="card">
+          <div class="card-header">
+            <div class="fw-bold">Shortcuts</div>
+            <div class="small text-secondary">Personal bookmark-style shortcuts shown through the shared MOSP shell.</div>
+          </div>
+          <div class="card-body">
+            <form id="shortcutForm" class="row g-2 mb-3">
+              <div class="col-md-4"><input id="shortcutName" class="form-control" placeholder="Name"></div>
+              <div class="col-md-6"><input id="shortcutUrl" class="form-control" placeholder="/index.html?q=..."></div>
+              <div class="col-md-2 d-grid"><button class="btn btn-outline-primary">Save</button></div>
+            </form>
+            <div id="shortcuts"></div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+  <script src="/mosp-ui-config.js"></script>
+  <script src="/vendor/bootstrap/bootstrap.bundle.min.js"></script>
+  <script type="module" src="/mosp-shell.js"></script>
+  <script src="/app.js"></script>
+  <script src="/pages/account.js"></script>
+</body>
+</html>
