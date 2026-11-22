@@ -1,27 +1,318 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>MIDENA · Admin</title>
-  <link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/vendor/bootstrap/bootstrap.min.css"><link rel="stylesheet" href="/vendor/bootstrap-icons/bootstrap-icons.min.css"><link rel="stylesheet" href="/vendor/mosp-design-system/styles.css"><link rel="stylesheet" href="/styles.css">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MIDENA - Admin</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/vendor/bootstrap/bootstrap.min.css" />
+  <link rel="stylesheet" href="/vendor/bootstrap-icons/bootstrap-icons.min.css" />
+  <link rel="stylesheet" href="/styles.css" />
+  <script src="/mosp-ui-config.js"></script>
+  <script src="/vendor/mosp-design-system/theme-boot.js"></script>
 </head>
-<body>
+<body data-page="admin">
   <div id="navbar"></div>
-  <main class="container-fluid py-3">
-    <h1 class="h3 mb-3">Administration</h1>
-    <div class="row g-3">
-      <div class="col-lg-2"><div class="nav flex-column nav-pills" id="adminTabs" role="tablist"><button class="nav-link active" data-bs-toggle="pill" data-bs-target="#usersPane" type="button">Users</button><button class="nav-link" data-bs-toggle="pill" data-bs-target="#locksPane" type="button">Locks</button><button class="nav-link" data-bs-toggle="pill" data-bs-target="#chromePane" type="button">Header/Footer</button><button class="nav-link" data-bs-toggle="pill" data-bs-target="#themePane" type="button">Diagram theme</button><button class="nav-link" data-bs-toggle="pill" data-bs-target="#auditPane" type="button">Audit Trail</button><button class="nav-link" data-bs-toggle="pill" data-bs-target="#changelogPane" type="button">Entity Changelog</button></div></div>
-      <div class="col-lg-10"><div class="tab-content">
-        <section class="tab-pane fade show active" id="usersPane"><div class="card"><div class="card-header d-flex justify-content-between"><span>Users</span><button class="btn btn-sm btn-primary" id="newUserBtn">New user</button></div><div class="table-responsive"><table class="table mb-0"><thead><tr><th>Username</th><th>Email</th><th>Role</th><th>Active</th><th></th></tr></thead><tbody id="userRows"></tbody></table></div></div></section>
-        <section class="tab-pane fade" id="locksPane"><div class="card"><div class="card-header">Diagram locks</div><div class="table-responsive"><table class="table mb-0"><thead><tr><th>Diagram</th><th>Locked by</th><th>Locked at</th><th>Expires</th><th></th></tr></thead><tbody id="lockRows"></tbody></table></div></div></section>
-        <section class="tab-pane fade" id="chromePane"><div class="card"><div class="card-header">Global diagram header/footer</div><div class="card-body"><label class="form-label" for="globalHeader">Header</label><textarea id="globalHeader" class="form-control mb-3" rows="3"></textarea><label class="form-label" for="globalFooter">Footer</label><textarea id="globalFooter" class="form-control mb-3" rows="3"></textarea><button class="btn btn-primary" id="saveChromeBtn">Save header/footer</button></div></div></section>
-        <section class="tab-pane fade" id="themePane"><div class="card"><div class="card-header"><div class="fw-bold">Global diagram theme</div><div class="small text-secondary">These defaults apply to BPMN, Flowchart and Web Sequence diagrams. Existing saved rendered SVGs pick up the theme the next time they are previewed or saved.</div></div><div class="card-body"><div class="row g-3" id="diagramThemeForm"></div><div class="d-flex flex-wrap gap-2 justify-content-end mt-3"><button class="btn btn-outline-secondary" id="resetThemeBtn" type="button">Reset to defaults</button><button class="btn btn-primary" id="saveThemeBtn" type="button"><i class="bi bi-palette me-1"></i>Save diagram theme</button></div></div></div></section>
-        <section class="tab-pane fade" id="auditPane"><div class="card"><div class="card-header d-flex justify-content-between"><span>Request audit trail</span><div class="btn-group"><button class="btn btn-sm btn-outline-secondary" id="auditPrev">Previous</button><button class="btn btn-sm btn-outline-secondary" id="auditNext">Next</button></div></div><div class="table-responsive"><table class="table mb-0"><thead><tr><th>Time</th><th>User</th><th>Method</th><th>Path</th><th>Status</th></tr></thead><tbody id="auditRows"></tbody></table></div><div class="card-footer small text-secondary" id="auditInfo"></div></div></section>
-        <section class="tab-pane fade" id="changelogPane"><div class="card"><div class="card-header d-flex justify-content-between"><span>Entity changelog</span><div class="btn-group"><button class="btn btn-sm btn-outline-secondary" id="changePrev">Previous</button><button class="btn btn-sm btn-outline-secondary" id="changeNext">Next</button></div></div><div class="table-responsive"><table class="table mb-0"><thead><tr><th>Time</th><th>Entity</th><th>Action</th><th>Summary</th><th>User</th></tr></thead><tbody id="changeRows"></tbody></table></div><div class="card-footer small text-secondary" id="changeInfo"></div></div></section>
-      </div></div>
+
+  <main class="container container-tight py-4">
+    <div class="d-flex flex-wrap gap-2 align-items-start justify-content-between mb-3">
+      <div>
+        <h1 class="h3 mb-1">Admin</h1>
+        <div class="text-muted">Manage users, groups, permissions, request audit logs, and semantic entity changelogs.</div>
+      </div>
+      <div class="d-flex gap-2">
+        <a class="btn btn-outline-primary btn-sm" href="/index.html"><i class="bi bi-arrow-left"></i> Back to projects</a>
+      </div>
+    </div>
+
+    <div class="admin-tab-layout d-flex flex-column flex-lg-row gap-3">
+      <ul class="nav nav-pills flex-column admin-tab-nav" id="adminTabs" role="tablist" aria-orientation="vertical">
+        <li class="nav-item" role="presentation">
+          <button class="nav-link active" id="tab-access" data-bs-toggle="tab" data-bs-target="#pane-access" type="button" role="tab" aria-controls="pane-access" aria-selected="true">
+            Users, groups &amp; permissions
+          </button>
+        </li>
+        <li class="nav-item" role="presentation">
+          <button class="nav-link" id="tab-audit" data-bs-toggle="tab" data-bs-target="#pane-audit" type="button" role="tab" aria-controls="pane-audit" aria-selected="false">
+            Audit &amp; changelog
+          </button>
+        </li>
+                <li class="nav-item" role="presentation">
+          <button class="nav-link" id="tab-mail" data-bs-toggle="tab" data-bs-target="#pane-mail" type="button" role="tab" aria-controls="pane-mail" aria-selected="false">
+            E-mail outbox
+          </button>
+        </li>
+                <li class="nav-item" role="presentation">
+          <button class="nav-link" id="tab-locks" data-bs-toggle="tab" data-bs-target="#pane-locks" type="button" role="tab" aria-controls="pane-locks" aria-selected="false">
+            <i class="bi bi-lock me-2" aria-hidden="true"></i>Diagram locks
+          </button>
+        </li>
+                <li class="nav-item" role="presentation">
+          <button class="nav-link" id="tab-chrome" data-bs-toggle="tab" data-bs-target="#pane-chrome" type="button" role="tab" aria-controls="pane-chrome" aria-selected="false">
+            <i class="bi bi-layout-text-window me-2" aria-hidden="true"></i>Header and footer
+          </button>
+        </li>
+                <li class="nav-item" role="presentation">
+          <button class="nav-link" id="tab-theme" data-bs-toggle="tab" data-bs-target="#pane-theme" type="button" role="tab" aria-controls="pane-theme" aria-selected="false">
+            <i class="bi bi-palette me-2" aria-hidden="true"></i>Diagram theme
+          </button>
+        </li>
+                <li class="nav-item" role="presentation">
+          <button class="nav-link" id="tab-features" data-bs-toggle="tab" data-bs-target="#pane-features" type="button" role="tab" aria-controls="pane-features" aria-selected="false">
+            Features
+          </button>
+        </li>
+      </ul>
+
+      <div class="tab-content flex-grow-1" id="adminTabContent">
+        <section class="tab-pane fade show active" id="pane-access" role="tabpanel" aria-labelledby="tab-access" tabindex="0">
+          <div class="card mb-3">
+            <div class="card-header d-flex align-items-start justify-content-between gap-3 flex-wrap">
+              <div>
+                <div class="fw-bold">User &amp; group administration</div>
+                <div class="text-muted small">Roles: viewer, engineer, contributor, product_owner, architect, maintainer, admin, and inherit. Create users, set roles and email addresses, deactivate or delete accounts, and reset passwords.</div>
+              </div>
+            </div>
+            <div class="card-body">
+              <h2 class="h6">Create user</h2>
+              <form id="createUserForm" class="row g-2 align-items-end mb-4">
+                <div class="col-md-3">
+                  <label class="form-label" for="cu-username">Username</label>
+                  <input id="cu-username" class="form-control" name="username" placeholder="username" required />
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label" for="cu-email">Email</label>
+                  <input id="cu-email" class="form-control" name="email" placeholder="email (optional)" />
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label" for="cu-password">Password</label>
+                  <input id="cu-password" class="form-control" name="password" type="password" placeholder="a long passphrase" required />
+                </div>
+                <div class="col-md-2">
+                  <label class="form-label" for="cu-role">Role</label>
+                  <select id="cu-role" class="form-select" name="role">
+                    <option value="viewer">viewer</option>
+                    <option value="engineer">engineer</option>
+                    <option value="contributor">contributor</option>
+                    <option value="product_owner">product_owner</option>
+                    <option value="architect">architect</option>
+                    <option value="maintainer">maintainer</option>
+                    <option value="admin">admin</option>
+                    <option value="inherit">inherit</option>
+                  </select>
+                </div>
+                <div class="col-md-auto">
+                  <button type="submit" class="btn btn-sm btn-primary text-nowrap"><i class="bi bi-person-plus"></i> Create</button>
+                </div>
+              </form>
+
+              <h2 class="h6">Users</h2>
+              <div id="usersTable" class="mb-4"></div>
+
+              <h2 class="h6">Create group</h2>
+              <form id="createGroupForm" class="row g-2 align-items-end mb-4">
+                <div class="col-md-6">
+                  <label class="form-label" for="cg-name">Name</label>
+                  <input id="cg-name" class="form-control" name="name" placeholder="group name" required />
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label" for="cg-role">Role</label>
+                  <select id="cg-role" class="form-select" name="role">
+                    <option value="">(no role)</option>
+                    <option value="viewer">viewer</option>
+                    <option value="engineer">engineer</option>
+                    <option value="contributor">contributor</option>
+                    <option value="product_owner">product_owner</option>
+                    <option value="architect">architect</option>
+                    <option value="maintainer">maintainer</option>
+                    <option value="admin">admin</option>
+                  </select>
+                </div>
+                <div class="col-md-auto">
+                  <button type="submit" class="btn btn-sm btn-primary text-nowrap"><i class="bi bi-people"></i> Create</button>
+                </div>
+              </form>
+
+              <h2 class="h6">Groups</h2>
+              <div id="groupsTable"></div>
+
+              <div id="msg" class="small text-muted mt-3"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="tab-pane fade" id="pane-audit" role="tabpanel" aria-labelledby="tab-audit" tabindex="0">
+          <ul class="nav nav-pills mb-3" id="auditSubTabs" role="tablist">
+            <li class="nav-item" role="presentation">
+              <button class="nav-link active" id="subtab-audit" type="button" role="tab" aria-controls="auditView" aria-selected="true">Audit trail</button>
+            </li>
+            <li class="nav-item" role="presentation">
+              <button class="nav-link" id="subtab-changelog" type="button" role="tab" aria-controls="changelogView" aria-selected="false">Changelog</button>
+            </li>
+          </ul>
+          <div id="auditView" role="tabpanel" aria-labelledby="subtab-audit">
+          <div class="card mb-3">
+            <div class="card-header d-flex align-items-start justify-content-between gap-3 flex-wrap">
+              <div>
+                <div class="fw-bold">Audit trail</div>
+                <div class="text-muted small">Request-level UI/API audit logs.</div>
+              </div>
+              <button type="button" id="refreshAuditBtn" class="btn btn-sm btn-outline-primary"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+            </div>
+            <div class="card-body">
+              <form id="auditFilters" class="row g-2 align-items-end mb-3">
+                <div class="col-md-3">
+                  <label class="form-label" for="audit-username">Username</label>
+                  <input id="audit-username" class="form-control form-control-sm" name="username" placeholder="any user" />
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label" for="audit-path">Path</label>
+                  <input id="audit-path" class="form-control form-control-sm" name="path" placeholder="/v1/projects" />
+                </div>
+                <div class="col-md-2">
+                  <label class="form-label" for="audit-method">Method</label>
+                  <select id="audit-method" class="form-select form-select-sm" name="method">
+                    <option value="">Any</option>
+                    <option value="GET">GET</option>
+                    <option value="POST">POST</option>
+                    <option value="PUT">PUT</option>
+                    <option value="PATCH">PATCH</option>
+                    <option value="DELETE">DELETE</option>
+                    <option value="ACTION">Sign-in attempts</option>
+                    <option value="MFA">Second factor</option>
+                  </select>
+                </div>
+                <div class="col-md-2">
+                  <label class="form-label" for="audit-status-min">Status from</label>
+                  <input id="audit-status-min" class="form-control form-control-sm" name="status_min" type="number" min="100" max="599" placeholder="100" />
+                </div>
+                <div class="col-md-2 d-grid">
+                  <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-filter"></i> Apply</button>
+                </div>
+              </form>
+              <div class="d-flex flex-wrap gap-2 align-items-center justify-content-between mb-2">
+                <div id="auditMsg" class="small text-muted">Loading…</div>
+                <div class="d-flex gap-2">
+                  <button type="button" id="auditPrevBtn" class="btn btn-sm btn-outline-primary">Prev</button>
+                  <button type="button" id="auditNextBtn" class="btn btn-sm btn-outline-primary">Next</button>
+                </div>
+              </div>
+              <div id="auditTable"></div>
+            </div>
+          </div>
+          </div>
+
+          <div id="changelogView" role="tabpanel" aria-labelledby="subtab-changelog" hidden>
+          <div class="card mb-3">
+            <div class="card-header d-flex align-items-start justify-content-between gap-3 flex-wrap">
+              <div>
+                <div class="fw-bold">Entity changelog</div>
+                <div class="text-muted small">Semantic before/after changes for projects, project versions and organisations.</div>
+              </div>
+              <button type="button" id="refreshEntityChangelogBtn" class="btn btn-sm btn-outline-primary"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+            </div>
+            <div class="card-body">
+              <form id="entityChangelogFilters" class="row g-2 align-items-end mb-3">
+                <div class="col-md-3">
+                  <label class="form-label" for="entity-type">Entity type</label>
+                  <select id="entity-type" class="form-select form-select-sm" name="entity_type">
+                    <option value="">All</option>
+                    <option value="project">Project</option>
+                    <option value="project_version">Project version</option>
+                    <option value="organisation">Organisation</option>
+                  </select>
+                </div>
+                <div class="col-md-2">
+                  <label class="form-label" for="entity-id">Entity ID</label>
+                  <input id="entity-id" class="form-control form-control-sm" name="entity_id" type="number" min="1" placeholder="optional" />
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label" for="entity-username">Changed by</label>
+                  <input id="entity-username" class="form-control form-control-sm" name="username" placeholder="any user" />
+                </div>
+                <div class="col-md-2">
+                  <label class="form-label" for="entity-q">Search</label>
+                  <input id="entity-q" class="form-control form-control-sm" name="q" placeholder="project, summary" />
+                </div>
+                <div class="col-md-2 d-grid">
+                  <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-filter"></i> Apply</button>
+                </div>
+              </form>
+              <div class="d-flex flex-wrap gap-2 align-items-center justify-content-between mb-2">
+                <div id="entityChangelogMsg" class="small text-muted">Loading…</div>
+                <div class="d-flex gap-2">
+                  <button type="button" id="entityChangelogPrevBtn" class="btn btn-sm btn-outline-primary">Prev</button>
+                  <button type="button" id="entityChangelogNextBtn" class="btn btn-sm btn-outline-primary">Next</button>
+                </div>
+              </div>
+              <div id="entityChangelogList"></div>
+            </div>
+          </div>
+          </div>
+        </section>
+
+                <section class="tab-pane fade" id="pane-mail" role="tabpanel" aria-labelledby="tab-mail" tabindex="0">
+          <div class="card mb-3">
+            <div class="card-header d-flex align-items-start justify-content-between gap-3 flex-wrap">
+              <div>
+                <div class="fw-bold">E-mail outbox</div>
+                <div class="text-muted small">Every queued mail's delivery state. Failures show the worker's exception class and retry backoff.</div>
+              </div>
+              <button type="button" id="refreshMailBtn" class="btn btn-sm btn-outline-primary"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+            </div>
+            <div class="card-body">
+              <div id="mailSummary" class="mb-2 small text-muted">Loading…</div>
+              <div id="mailTable"></div>
+            </div>
+          </div>
+        </section>
+
+                <section class="tab-pane fade" id="pane-locks" role="tabpanel" aria-labelledby="tab-locks" tabindex="0">
+          <div class="card mb-3">
+            <div class="card-header fw-bold">Diagram locks</div>
+            <div class="table-responsive"><table class="table table-sm mb-0"><thead><tr><th>Diagram</th><th>Locked by</th><th>Locked at</th><th>Expires</th><th></th></tr></thead><tbody id="lockRows"></tbody></table></div>
+          </div>
+        </section>
+        <section class="tab-pane fade" id="pane-chrome" role="tabpanel" aria-labelledby="tab-chrome" tabindex="0">
+          <div class="card mb-3">
+            <div class="card-header fw-bold">Global diagram header and footer</div>
+            <div class="card-body">
+              <label class="form-label" for="globalHeader">Header</label><textarea id="globalHeader" class="form-control mb-3" rows="3" maxlength="4000"></textarea>
+              <label class="form-label" for="globalFooter">Footer</label><textarea id="globalFooter" class="form-control mb-3" rows="3" maxlength="4000"></textarea>
+              <button class="btn btn-primary" id="saveChromeBtn" type="button">Save header and footer</button>
+            </div>
+          </div>
+        </section>
+        <section class="tab-pane fade" id="pane-theme" role="tabpanel" aria-labelledby="tab-theme" tabindex="0">
+          <div class="card mb-3">
+            <div class="card-header"><div class="fw-bold">Global diagram theme</div><div class="small text-muted">These defaults apply to BPMN, flowchart and sequence diagrams. Saved renderings pick up the theme the next time they are previewed or saved.</div></div>
+            <div class="card-body">
+              <div class="row g-3" id="diagramThemeForm"></div>
+              <div class="d-flex flex-wrap gap-2 justify-content-end mt-3"><button class="btn btn-outline-secondary" id="resetThemeBtn" type="button">Reset to defaults</button><button class="btn btn-primary" id="saveThemeBtn" type="button"><i class="bi bi-palette me-1"></i>Save diagram theme</button></div>
+            </div>
+          </div>
+        </section>
+        <section class="tab-pane fade" id="pane-features" role="tabpanel" aria-labelledby="tab-features" tabindex="0">
+          <div class="card mb-3">
+            <div class="card-body">
+              <h2 class="h5">Features</h2>
+              <p>Choose the tools available across this MIDENA installation. Changes save immediately and apply to every user, including administrators. Existing records are retained while a feature is off.</p>
+              <p class="small text-muted">Parent switches control their subsections. User permissions still apply. A feature the deployment turns off (<code>MIDENA_FEATURE_*</code>) cannot be turned on here.</p>
+              <div id="feature-status" class="small" role="status" aria-live="polite" hidden></div>
+              <div class="d-flex gap-3 align-items-center mt-2"><button id="features-reload" type="button" class="btn btn-outline-secondary btn-sm">Reload settings</button><span id="feature-version" class="small text-muted"></span></div>
+              <div id="feature-settings"></div>
+            </div>
+          </div>
+        </section>
+      </div>
     </div>
   </main>
-  <div class="modal fade" id="userModal" tabindex="-1" aria-hidden="true"><div class="modal-dialog"><form class="modal-content" id="userForm"><div class="modal-header"><h2 class="modal-title h5">New user</h2><button class="btn-close" type="button" data-bs-dismiss="modal" aria-label="Close"></button></div><div class="modal-body"><input type="hidden" id="userId"><div class="mb-3"><label class="form-label">Username</label><input class="form-control" id="username" required></div><div class="mb-3"><label class="form-label">Email</label><input class="form-control" id="email" type="email"></div><div class="mb-3"><label class="form-label">Role</label><select class="form-select" id="role"><option>viewer</option><option>engineer</option><option>product_owner</option><option>architect</option><option>contributor</option><option>maintainer</option><option>diagram_admin</option><option>admin</option></select></div><div class="mb-3" id="passwordWrap"><label class="form-label">Password</label><input class="form-control" id="password" type="password" minlength="8"></div><div class="form-check"><input class="form-check-input" type="checkbox" id="active" checked><label class="form-check-label">Active</label></div></div><div class="modal-footer"><button class="btn btn-outline-secondary" data-bs-dismiss="modal" type="button">Cancel</button><button class="btn btn-primary" type="submit">Save</button></div></form></div></div>
-  <script src="/mosp-ui-config.js"></script><script src="/vendor/bootstrap/bootstrap.bundle.min.js"></script><script type="module" src="/mosp-shell.js"></script><script src="/app.js"></script><script src="/pages/admin.js"></script>
+
+  <script src="/vendor/bootstrap/bootstrap.bundle.min.js"></script>
+  <script type="module" src="/mosp-shell.js"></script>
+  <script defer src="/app.js"></script>
+  <script defer src="/pages/admin.js"></script>
+  <script defer src="/pages/admin-features.js"></script>
+  <script defer src="/pages/admin-diagrams.js"></script>
 </body>
 </html>

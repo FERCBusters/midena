@@ -1,34 +1,47 @@
 from __future__ import annotations
 
-import secrets
-from datetime import datetime
+import re
 from collections.abc import Mapping
 
 from fastapi import Depends, HTTPException, Request, Response
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.db.models import User, UserEmail
+from app.core.datetime_utils import utc_now_naive
+from app.core.email_address import single_mailbox
+from app.db.models import User
 from app.db.session import get_db
-from app.security.passwords import hash_password, verify_password
+from app.security.client_addr import remote_user_peer_trusted
+from app.security.csrf import host_bound_cookie_name
+from app.security.passwords import (
+    derive_password_hash,
+    hash_password,
+    needs_rehash,
+    verify_password,
+)
 from app.security.roles import (
     ROLE_ADMIN,
     ROLE_ARCHITECT,
     ROLE_CONTRIBUTOR,
     ROLE_ENGINEER,
+    ROLE_FRAMEWORK_ADMIN,
     ROLE_INHERIT,
-    ROLE_DIAGRAM_ADMIN,
     ROLE_MAINTAINER,
     ROLE_PRODUCT_OWNER,
     ROLE_VIEWER,
     attach_effective_role,
     canonicalize_role,
 )
-from app.security.sessions import create_session, get_session, refresh_session
+from app.security.sessions import (
+    csrf_token_for,
+    get_session,
+    refresh_session,
+)
 
 ALLOWED_USER_ROLES = {
     ROLE_ADMIN,
-    ROLE_DIAGRAM_ADMIN,
+    ROLE_FRAMEWORK_ADMIN,
     ROLE_MAINTAINER,
     ROLE_CONTRIBUTOR,
     ROLE_ENGINEER,
@@ -38,9 +51,15 @@ ALLOWED_USER_ROLES = {
     ROLE_INHERIT,
 }
 
+# Every rejected sign-in pays one full password verification against this
+# hash, whether or not the username names an account, so response timing
+# cannot tell an attacker whether a username exists (or is active).
+_DUMMY_PASSWORD_HASH = derive_password_hash("midena-timing-equaliser-0" * 4)
 
-def get_password_hash(password: str) -> str:
-    return hash_password(password)
+
+def get_password_hash(password: str, *, username: str = "") -> str:
+    """Hash a new password for ``username`` under the rules for new passwords."""
+    return hash_password(password, username=username)
 
 
 def get_user_by_username(db: Session, username: str) -> User | None:
@@ -48,165 +67,144 @@ def get_user_by_username(db: Session, username: str) -> User | None:
 
 
 def get_user_by_email(db: Session, email: str) -> User | None:
+    """The account whose e-mail is this address, compared without case."""
     e = (email or "").strip().lower()
     if not e:
         return None
-    user = db.query(User).filter(User.email == e).one_or_none()
-    if user:
-        return user
-    row = db.query(UserEmail).filter(UserEmail.email_lower == e).one_or_none()
-    if not row:
-        return None
-    return db.query(User).filter(User.id == row.user_id).one_or_none()
+    return db.query(User).filter(func.lower(func.trim(User.email)) == e).one_or_none()
 
 
 def authenticate_user(db: Session, username: str, password: str) -> User | None:
+    """Verify local credentials.
+
+    Unknown and inactive accounts verify against the dummy hash, so every
+    rejection costs the same work whether or not the username names an
+    account: response timing carries no account-existence signal.
+    """
     user = get_user_by_username(db, username)
-    if not user:
-        return None
-    if not user.is_active:
+    if user is None or not user.is_active:
+        verify_password(password, _DUMMY_PASSWORD_HASH)
         return None
     if not verify_password(password, user.password_hash):
         return None
-    user.last_login_at = datetime.utcnow()
-    db.add(user)
-    db.commit()
-    db.refresh(user)
+    if needs_rehash(user.password_hash):
+        _raise_work_factor(db, user, password)
     return user
 
 
-def _remote_user_from_headers(headers: Mapping[str, str]) -> str | None:
-    if not bool(settings.trust_remote_user):
-        return None
+def _raise_work_factor(db: Session, user: User, password: str) -> None:
+    """Store the proven password at the current work factor, as KEEN does.
 
-    candidates: list[str] = []
-
-    configured = (settings.remote_user_header_name or "").strip()
-    if configured:
-        candidates.append(configured)
-
-    candidates.extend(
-        [
-            "REMOTE_USER",
-            "X-Remote-User",
-            "X-Vouch-User",
-            "X-Forwarded-User",
-        ]
+    The hash is replaced only if it is still the one that was verified, so a
+    password changed meanwhile is never undone. A pending second-factor
+    ceremony made against the previous hash ends with it.
+    """
+    verified = user.password_hash
+    replaced = (
+        db.query(User)
+        .filter(User.id == user.id, User.password_hash == verified)
+        .update(
+            {User.password_hash: derive_password_hash(password)},
+            synchronize_session=False,
+        )
     )
-
-    seen = set()
-    ordered: list[str] = []
-    for h in candidates:
-        k = h.lower()
-        if k in seen:
-            continue
-        seen.add(k)
-        ordered.append(h)
-
-    for header_name in ordered:
-        raw = headers.get(header_name)
-        if raw is None:
-            continue
-        value = str(raw).strip()
-        if value:
-            return value
-
-    return None
-
-
-def _extract_remote_user(request: Request) -> str | None:
-    return _remote_user_from_headers(request.headers)
-
-    candidates: list[str] = []
-
-    configured = (settings.remote_user_header_name or "").strip()
-    if configured:
-        candidates.append(configured)
-
-    candidates.extend(
-        [
-            "REMOTE_USER",
-            "X-Remote-User",
-            "X-Vouch-User",
-            "X-Forwarded-User",
-        ]
-    )
-
-    seen = set()
-    ordered = []
-    for h in candidates:
-        k = h.lower()
-        if k in seen:
-            continue
-        seen.add(k)
-        ordered.append(h)
-
-    for header_name in ordered:
-        raw = request.headers.get(header_name)
-        if raw is None:
-            continue
-        value = raw.strip()
-        if value:
-            return value
-
-    return None
-
-
-def _normalize_role(raw: str | None) -> str:
-    canonical = canonicalize_role(raw)
-    if canonical is None:
-        return ROLE_VIEWER
-    return canonical
-
-
-def _auto_provision_remote_user(db: Session, username: str) -> User | None:
-    if not bool(getattr(settings, "remote_user_auto_provision", False)):
-        return None
-
-    role = _normalize_role(
-        getattr(settings, "remote_user_auto_provision_role", ROLE_VIEWER)
-    )
-
-    existing = get_user_by_username(db, username)
-    if existing:
-        return existing
-
-    u = User(
-        username=username,
-        password_hash=get_password_hash(secrets.token_urlsafe(24)),
-        role=role,
-        is_active=True,
-        last_login_at=datetime.utcnow(),
-    )
-    db.add(u)
     db.commit()
-    db.refresh(u)
-    return u
+    if replaced:
+        db.refresh(user)
+
+
+def _remote_user_from_headers(
+    headers: Mapping[str, str], socket_peer: str | None = None
+) -> str | None:
+    """Read the trusted identity header.
+
+    Only the single configured header is honoured, and only when the socket
+    peer sits inside the trusted proxy networks: clients can send any header,
+    so the value counts as authentication only when a trusted proxy delivered
+    it. Deployees must also guarantee the API is reachable through that proxy
+    alone, and that the proxy sets (or clears) the header on every route.
+    """
+
+    if not settings.trust_remote_user:
+        return None
+
+    # The identity header is believed only from the authenticating proxies
+    # named for it (MIDENA_REMOTE_USER_TRUSTED_CIDRS). Proxies trusted to
+    # forward client addresses are a separate list: the Compose default there
+    # includes the network gateway, which every process on the Docker host
+    # connects through.
+    if not remote_user_peer_trusted(socket_peer):
+        return None
+
+    configured = (settings.remote_user_header_name or "").strip() or "REMOTE_USER"
+    raw = headers.get(configured)
+    if raw is None:
+        return None
+    value = str(raw).strip()
+    if not value:
+        return None
+    return value
+
+
+def still_signed_in(
+    headers: Mapping[str, str],
+    cookies: Mapping[str, str],
+    db: Session,
+    user_id: int,
+    socket_peer: str | None = None,
+) -> bool:
+    """Whether what authenticated a connection still names this account.
+
+    A notification socket outlives the request that opened it, so it asks
+    again while it stays open. Unlike a request, the question extends
+    nothing: an idle socket does not keep a session alive.
+    """
+    remote_user = _remote_user_from_headers(headers, socket_peer)
+    if remote_user:
+        user = get_user_by_username(db, remote_user)
+        return bool(user and user.is_active and user.id == user_id)
+
+    session_cookie = cookies.get(session_cookie_name())
+    session_row = get_session(db, session_cookie) if session_cookie else None
+    if not session_row or session_row.user_id != user_id:
+        return False
+    user = (
+        db.query(User)
+        .filter(User.id == user_id, User.is_active == True)  # noqa: E712 - SQLAlchemy boolean column predicate
+        .one_or_none()
+    )
+    if not user:
+        return False
+    from app.security.mfa import local_session_allowed
+
+    return local_session_allowed(db, user, session_row)
 
 
 def get_current_user_from_headers_cookies(
     headers: Mapping[str, str],
     cookies: Mapping[str, str],
     db: Session,
+    socket_peer: str | None = None,
 ) -> User | None:
     """Return the current user, or None if not authenticated.
 
-    Used by both HTTP requests and WebSocket handshakes.
+    Used by both HTTP requests and WebSocket handshakes; the socket peer gates
+    trusted remote-user authentication.
     """
-    remote_user = _remote_user_from_headers(headers)
+    remote_user = _remote_user_from_headers(headers, socket_peer)
     if remote_user:
+        # The authenticating proxy names an existing account; MIDENA creates
+        # none here, as KEEN does not.
         user = get_user_by_username(db, remote_user)
-        if not user:
-            user = _auto_provision_remote_user(db, remote_user)
         if user and user.is_active:
-            user.last_login_at = datetime.utcnow()
+            user.last_login_at = utc_now_naive()
             db.add(user)
             db.commit()
             db.refresh(user)
             return user
         return None
 
-    session_cookie = cookies.get(settings.session_cookie_name)
+    session_cookie = cookies.get(session_cookie_name())
     if not session_cookie:
         return None
 
@@ -216,18 +214,33 @@ def get_current_user_from_headers_cookies(
 
     user = (
         db.query(User)
-        .filter(User.id == session_row.user_id, User.is_active == True)
+        .filter(User.id == session_row.user_id, User.is_active == True)  # noqa: E712 - SQLAlchemy boolean column predicate
         .one_or_none()
     )  # noqa: E712
     if not user:
         return None
 
+    # A local session must still prove its second factor against the
+    # account's current enrolment; anything stale is deleted and refused.
+    from app.security.mfa import local_session_allowed
+
+    if not local_session_allowed(db, user, session_row):
+        db.delete(session_row)
+        db.commit()
+        return None
+
     refresh_session(db, session_row, settings.session_ttl_seconds)
+    # The token this session's writes must carry (security/csrf.py), held on
+    # the instance beside effective_role.
+    setattr(user, "session_csrf", csrf_token_for(session_cookie.strip()))
     return user
 
 
 def get_current_user_from_request(request: Request, db: Session) -> User | None:
-    return get_current_user_from_headers_cookies(request.headers, request.cookies, db)
+    peer = getattr(getattr(request, "client", None), "host", None)
+    return get_current_user_from_headers_cookies(
+        request.headers, request.cookies, db, peer
+    )
 
 
 def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
@@ -251,33 +264,38 @@ def require_admin(
     return user
 
 
+def session_cookie_name() -> str:
+    """The session cookie's name: host-bound (``__Host-``) where cookies are
+    Secure and no cookie domain is set, as the device cookie is."""
+
+    return host_bound_cookie_name(settings.session_cookie_name)
+
+
 def set_session_cookie(response: Response, session_id: str) -> None:
     samesite = (settings.cookie_samesite or "lax").lower()
     if samesite not in ("lax", "strict", "none"):
         samesite = "lax"
 
     response.set_cookie(
-        key=settings.session_cookie_name,
+        key=session_cookie_name(),
         value=session_id,
         httponly=True,
-        secure=bool(settings.cookie_secure),
-        samesite=samesite,
-        domain=(settings.cookie_domain or "").strip() or None,
+        secure=settings.cookie_secure,
+        samesite=samesite,  # type: ignore[arg-type]  # validated above
+        domain=settings.cookie_domain.strip() or None,
         path="/",
-        max_age=int(settings.session_ttl_seconds),
+        max_age=settings.session_ttl_seconds,
     )
 
 
 def clear_session_cookie(response: Response) -> None:
+    # Browsers refuse a __Host- cookie, even an expiring one, without Secure.
     response.delete_cookie(
-        key=settings.session_cookie_name,
-        domain=(settings.cookie_domain or "").strip() or None,
+        key=session_cookie_name(),
+        domain=settings.cookie_domain.strip() or None,
         path="/",
+        secure=settings.cookie_secure,
     )
-
-
-def create_login_session(db: Session, user: User) -> str:
-    return create_session(db, user_id=user.id, ttl_seconds=settings.session_ttl_seconds)
 
 
 def create_user(
@@ -292,43 +310,37 @@ def create_user(
     uname = (username or "").strip()
     if not uname:
         raise ValueError("username is required")
+    # The username is reflected into response headers (X-Midena-User) and is
+    # compared case-insensitively during SSO linking, so it is restricted to a
+    # conservative charset and length.
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", uname):
+        raise ValueError(
+            "username must be 1-64 characters of letters, digits, '_', '-' or '.'"
+        )
     if get_user_by_username(db, uname):
         raise ValueError("username already exists")
 
     email_norm = None
-    if email is not None:
-        email_norm = (email or "").strip().lower() or None
-        if email_norm and get_user_by_email(db, email_norm):
+    if email is not None and email.strip():
+        email_norm = single_mailbox(email)
+        if email_norm is None:
+            raise ValueError("Invalid email address")
+        if get_user_by_email(db, email_norm):
             raise ValueError("email already exists")
-    if not password or len(password) < 8:
-        raise ValueError("password must be at least 8 chars")
-
-    normalized = canonicalize_role(role) or ROLE_VIEWER
+    normalized = canonicalize_role(role) if (role or "").strip() else ROLE_VIEWER
     if normalized not in ALLOWED_USER_ROLES:
         raise ValueError(
-            "role must be one of: admin, maintainer, contributor, engineer, product_owner, architect, viewer, inherit"
+            "role must be one of: admin, framework_admin, maintainer, contributor, engineer, product_owner, architect, viewer, inherit"
         )
 
     u = User(
         username=uname,
         email=email_norm,
-        password_hash=get_password_hash(password),
+        password_hash=get_password_hash(password, username=uname),
         role=normalized,
         is_active=bool(is_active),
     )
     db.add(u)
-    db.flush()
-    if email_norm:
-        db.add(
-            UserEmail(
-                user_id=u.id,
-                email=email_norm,
-                email_lower=email_norm,
-                source="user",
-                is_primary=True,
-                is_verified=True,
-            )
-        )
     db.commit()
     db.refresh(u)
     return u

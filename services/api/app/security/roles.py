@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from sqlalchemy import case, func
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db.models import Group, User, UserGroup
 
 ROLE_ADMIN = "admin"
 ROLE_DIAGRAM_ADMIN = "diagram_admin"
-ROLE_FRAMEWORK_ADMIN = "framework_admin"  # Accepted only as a legacy alias.
+# Accepted as a legacy spelling of diagram_admin from copied deployments.
+ROLE_FRAMEWORK_ADMIN = "framework_admin"
 ROLE_MAINTAINER = "maintainer"
 ROLE_CONTRIBUTOR = "contributor"
 ROLE_ENGINEER = "engineer"
@@ -26,7 +27,6 @@ _ROLE_PRECEDENCE = {
     ROLE_CONTRIBUTOR: 5,
     ROLE_MAINTAINER: 6,
     ROLE_DIAGRAM_ADMIN: 6,  # Same precedence tier as maintainer.
-    ROLE_FRAMEWORK_ADMIN: 6,  # Legacy alias accepted from copied deployments.
     ROLE_ADMIN: 7,
 }
 
@@ -58,39 +58,70 @@ def normalize_role(role: str | None) -> str | None:
     return canonicalize_role(role)
 
 
-def _group_role_priority_expr():
-    col = func.lower(func.trim(Group.role))
-    return case(
-        (col == ROLE_ADMIN, _ROLE_PRECEDENCE[ROLE_ADMIN]),
-        (col == ROLE_DIAGRAM_ADMIN, _ROLE_PRECEDENCE[ROLE_DIAGRAM_ADMIN]),
-        (col == ROLE_FRAMEWORK_ADMIN, _ROLE_PRECEDENCE[ROLE_FRAMEWORK_ADMIN]),
-        (col == ROLE_MAINTAINER, _ROLE_PRECEDENCE[ROLE_MAINTAINER]),
-        (col == ROLE_CONTRIBUTOR, _ROLE_PRECEDENCE[ROLE_CONTRIBUTOR]),
-        (col == ROLE_ENGINEER, _ROLE_PRECEDENCE[ROLE_ENGINEER]),
-        (col == ROLE_PRODUCT_OWNER, _ROLE_PRECEDENCE[ROLE_PRODUCT_OWNER]),
-        (col == ROLE_ARCHITECT, _ROLE_PRECEDENCE[ROLE_ARCHITECT]),
-        (col == ROLE_VIEWER, _ROLE_PRECEDENCE[ROLE_VIEWER]),
-        else_=0,
-    )
-
-
 def resolve_group_role(db: Session, user_id: int) -> str | None:
-    max_rank = (
-        db.query(func.max(_group_role_priority_expr()))
-        .select_from(UserGroup)
-        .join(Group, Group.id == UserGroup.group_id)
+    """The highest role among the groups an account belongs to.
+
+    The role returned is one a group actually holds. Maintainer and diagram
+    administrator share a precedence tier: a group holding only one of them
+    is never read as holding the other. Maintainer's permissions contain the
+    diagram administrator's, so an account whose groups hold both resolves to
+    maintainer.
+    """
+    held = {
+        role
+        for (raw,) in db.query(Group.role)
+        .join(UserGroup, UserGroup.group_id == Group.id)
         .filter(UserGroup.user_id == user_id)
-        .scalar()
-    )
-
-    if not max_rank:
+        .all()
+        if (role := canonicalize_role(raw)) in _ROLE_PRECEDENCE
+    }
+    if not held:
         return None
+    return max(held, key=lambda role: (_ROLE_PRECEDENCE[role], role == ROLE_MAINTAINER))
 
-    rank = int(max_rank)
-    for role, priority in _ROLE_PRECEDENCE.items():
-        if priority == rank and role != ROLE_FRAMEWORK_ADMIN:
-            return role
-    return None
+
+# One number for the advisory lock every administrator-affecting change takes.
+_ADMIN_CHANGE_LOCK = 0x4F53504D4145
+
+
+def lock_admin_changes(db: Session) -> None:
+    """Serialise changes that can remove an administrator.
+
+    Held to the end of the transaction, so two changes that would each leave
+    the other account as the last administrator cannot both pass their check.
+    """
+    db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _ADMIN_CHANGE_LOCK})
+
+
+def active_admin_count(db: Session) -> int:
+    """Active accounts that are administrators in effect: by their own role,
+    or by inheriting it from a group."""
+    db.flush()
+    admin_groups = [
+        group_id
+        for group_id, raw in db.query(Group.id, Group.role).all()
+        if canonicalize_role(raw) == ROLE_ADMIN
+    ]
+    inheriting = (
+        {
+            user_id
+            for (user_id,) in db.query(UserGroup.user_id)
+            .filter(UserGroup.group_id.in_(admin_groups))
+            .all()
+        }
+        if admin_groups
+        else set()
+    )
+    count = 0
+    for user_id, raw in (
+        db.query(User.id, User.role).filter(User.is_active.is_(True)).all()
+    ):
+        direct = canonicalize_role(raw)
+        if direct == ROLE_ADMIN:
+            count += 1
+        elif direct in (None, ROLE_INHERIT) and user_id in inheriting:
+            count += 1
+    return count
 
 
 def attach_effective_role(db: Session, user: User) -> str:

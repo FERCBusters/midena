@@ -1,9 +1,11 @@
 import {
+  clearCachedMe,
   initNavbar,
-  enableTableSorting,
   renderTaxonomyPillsBrowser,
   safeExternalHref,
-} from '/vendor/mosp-design-system/app.js';
+  applyTheme,
+  THEMES,
+} from "/vendor/mosp-design-system/app.js";
 
 // Mount the unified navbar for legacy (non-module) pages.
 // Pages should include:
@@ -14,12 +16,14 @@ import {
 
 // Expose reusable UI helpers to non-module page scripts.
 window.mospUi = window.mospUi || {};
-window.mospUi.enableTableSorting = enableTableSorting;
 window.mospUi.renderTaxonomyPillsBrowser = renderTaxonomyPillsBrowser;
 window.mospUi.safeExternalHref = safeExternalHref;
-
-enableTableSorting();
+window.mospUi.applyTheme = applyTheme;
+window.mospUi.THEMES = THEMES;
+// The navbar keeps the signed-in user for a minute per tab; a page that
+// changes what the navbar shows (such as the Features tab) clears it.
+window.mospUi.clearCachedMe = clearCachedMe;
 
 initNavbar().catch((err) => {
-  console.error('MOSP navbar init failed', err);
+  console.error("MOSP navbar init failed", err);
 });

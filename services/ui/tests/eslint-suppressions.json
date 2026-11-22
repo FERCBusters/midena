@@ -1,0 +1,47 @@
+{
+  "services/ui/public/app.js": {
+    "no-unsanitized/property": {
+      "count": 1
+    }
+  },
+  "services/ui/public/pages/account.js": {
+    "no-unsanitized/property": {
+      "count": 4
+    }
+  },
+  "services/ui/public/pages/admin-diagrams.js": {
+    "no-unsanitized/property": {
+      "count": 2
+    }
+  },
+  "services/ui/public/pages/admin.js": {
+    "no-unsanitized/property": {
+      "count": 5
+    }
+  },
+  "services/ui/public/pages/diagram.js": {
+    "no-unsanitized/property": {
+      "count": 20
+    }
+  },
+  "services/ui/public/pages/folders.js": {
+    "no-unsanitized/property": {
+      "count": 3
+    }
+  },
+  "services/ui/public/pages/index.js": {
+    "no-unsanitized/property": {
+      "count": 11
+    }
+  },
+  "services/ui/public/pages/public-diagram.js": {
+    "no-unsanitized/property": {
+      "count": 1
+    }
+  },
+  "services/ui/public/pages/tags.js": {
+    "no-unsanitized/property": {
+      "count": 1
+    }
+  }
+}

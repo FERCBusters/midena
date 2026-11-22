@@ -3,20 +3,20 @@ from __future__ import annotations
 from collections.abc import Generator
 
 from sqlalchemy import create_engine
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.core.config import settings
 
 if not settings.database_url:
-    # Fall back for docs/testing; runtime requires env var.
-    DATABASE_URL = "sqlite+pysqlite:///:memory:"
-else:
-    DATABASE_URL = settings.database_url
+    # PostgreSQL is the only supported database, for running and for tests.
+    raise RuntimeError("MIDENA_DATABASE_URL is required (a PostgreSQL database)")
 
-engine = create_engine(DATABASE_URL, future=True, pool_pre_ping=True)
+engine = create_engine(settings.database_url, future=True, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine, future=True)
 
-Base = declarative_base()
+
+class Base(DeclarativeBase):
+    """Typed declarative base so Mapped[] attributes type-check."""
 
 
 def get_db() -> Generator:

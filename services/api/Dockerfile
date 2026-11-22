@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
 
 WORKDIR /app
 
@@ -15,17 +15,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-venv \
   && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml poetry.lock* /app/
+# The lock is part of the build: without it the build stops instead of
+# resolving whatever versions are newest that day.
+COPY pyproject.toml poetry.lock /app/
 
+# Make poetry put the venv in /app/.venv and use the image's Python
 RUN poetry config virtualenvs.in-project true \
  && poetry env use /usr/local/bin/python \
- && if [ -f poetry.lock ]; then \
-      poetry install --no-interaction --no-ansi --only main --no-root; \
-    else \
-      poetry lock --no-interaction --no-ansi \
-   && poetry install --no-interaction --no-ansi --only main --no-root; \
-    fi
+ && poetry install --no-interaction --no-ansi --only main --no-root
 
+# Make the venv the default Python for runtime
 ENV PATH="/app/.venv/bin:$PATH"
 
 COPY app /app/app
@@ -35,6 +34,7 @@ COPY scripts /app/scripts
 
 RUN chmod +x /app/scripts/start.sh /app/scripts/start-celery-worker.sh /app/scripts/start-celery-beat.sh
 
+# Create non-root runtime user
 RUN addgroup --system --gid 10001 midena \
  && adduser --system --uid 10001 --ingroup midena --home /home/midena midena \
  && mkdir -p /var/lib/midena \

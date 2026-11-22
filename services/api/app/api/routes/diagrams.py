@@ -1,34 +1,43 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
-import re
+import base64
+import binascii
 import secrets
 import uuid
-import xml.etree.ElementTree as ET
+from datetime import timedelta
+from functools import partial
+from typing import Annotated
+from xml.etree import ElementTree as ET
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import PlainTextResponse, Response
+import anyio
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import Response
 from sqlalchemy import String, func, or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_request_user, require_admin
+from app.api.deps import DB_INT_MAX, DbId, PageLimit, PageOffset, get_request_user
+from app.api.downloads import attachment_media_type, content_disposition_attachment
 from app.api.payloads import (
+    DiagramAIGeneratePayload,
     DiagramCommentCreatePayload,
     DiagramCommentUpdatePayload,
-    DiagramAIGeneratePayload,
     DiagramCreatePayload,
     DiagramEntityLinkPayload,
     DiagramLockPayload,
-    DiagramTagCreatePayload,
-    DiagramTagUpdatePayload,
     DiagramMetadataLinkPayload,
     DiagramSavePayload,
     DiagramSharePayload,
+    DiagramTagCreatePayload,
+    DiagramTagUpdatePayload,
     DiagramUpdatePayload,
     FolderCreatePayload,
     FolderUpdatePayload,
     GoogleDriveExportPayload,
 )
+from app.core.config import settings
+from app.core.datetime_utils import utc_now_naive
+from app.core.features import is_enabled, require_feature
 from app.db.models import (
     Diagram,
     DiagramComment,
@@ -41,7 +50,6 @@ from app.db.models import (
     Folder,
     GlobalDiagramChrome,
     User,
-    UserEmail,
 )
 from app.db.session import get_db
 from app.security.permissions import (
@@ -52,25 +60,33 @@ from app.security.permissions import (
     PERM_FOLDER_MANAGE,
     has_permission,
 )
-from app.security.roles import attach_effective_role
+from app.security.rate_limit import take_rate_limit
+from app.security.roles import ROLE_ADMIN, attach_effective_role
+from app.security.svg import SvgError, sanitise_svg
+from app.security.xml import parse_untrusted_xml
+from app.services import google_drive
+from app.services.diagram_ai import (
+    DiagramAIError,
+    generate_diagram_code,
+)
+from app.services.diagram_ai import (
+    ai_status as diagram_ai_status,
+)
+from app.services.diagram_theme import normalise_diagram_theme
 from app.services.entity_changelog import (
     diagram_changelog_state,
     folder_changelog_state,
     list_entity_changelogs,
     record_entity_changelog,
 )
-from app.core.config import settings
-from app.services.google_drive import GoogleDriveExportError, upload_base64_to_drive
-from app.services.diagram_theme import normalise_diagram_theme
-from app.services.diagram_ai import (
-    DiagramAIError,
-    ai_status as diagram_ai_status,
-    generate_diagram_code,
-)
 from app.services.mailer import send_diagram_share_email
-from app.security.rate_limit import check_rate_limit, record_rate_limit_attempt
 
 router = APIRouter()
+
+BPMN_NS = "http://www.omg.org/spec/BPMN/20100524/MODEL"
+# Sequence and flowchart source: Mermaid documents of a few kilobytes; the
+# bound keeps every scan of the text below within a fixed budget.
+MAX_TEXT_SOURCE_CHARS = 1_000_000
 
 DEFAULT_BPMN_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <bpmn:definitions xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -118,13 +134,17 @@ TAG_COLOURS = [
     "#6610f2",
     "#6c757d",
 ]
-TAG_COLOUR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+_SLUG_KEEP = frozenset("abcdefghijklmnopqrstuvwxyz0123456789")
 
 
 def _slugify(value: str) -> str:
-    raw = str(value or "").strip().lower()
-    raw = re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
-    return raw[:200] or "item"
+    out: list[str] = []
+    for ch in value.strip().lower():
+        if ch in _SLUG_KEEP:
+            out.append(ch)
+        elif out and out[-1] != "-":
+            out.append("-")
+    return "".join(out).strip("-")[:200] or "item"
 
 
 def _clean_tag_name(value: str | None) -> str:
@@ -138,14 +158,8 @@ def _clean_tag_name(value: str | None) -> str:
     return name
 
 
-def _tag_key(value: str | None) -> str:
-    return _clean_tag_name(value).lower()
-
-
 def _sql_like_escape(value: str) -> str:
-    return (
-        str(value or "").replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    )
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _tag_json_text_like_pattern(value: str) -> str:
@@ -159,25 +173,14 @@ def _random_tag_colour() -> str:
     return secrets.choice(TAG_COLOURS)
 
 
-def _normalise_tag_colour(value: str | None) -> str:
-    if value is None or str(value).strip() == "":
-        return _random_tag_colour()
-    colour = str(value).strip()
-    if not TAG_COLOUR_RE.match(colour):
-        raise HTTPException(
-            status_code=400, detail="Tag colour must be a #RRGGBB hex colour"
-        )
-    return colour.lower()
-
-
 def _tag_to_dict(row: DiagramTag, count: int = 0) -> dict:
     return {
-        "id": int(row.id),
+        "id": row.id,
         "name": row.name,
         "tag": row.name,
         "name_lower": row.name_lower,
         "color": row.color,
-        "count": int(count or 0),
+        "count": count,
         "created_at": row.created_at,
         "updated_at": row.updated_at,
     }
@@ -197,8 +200,8 @@ def _diagram_tag_counts(rows: list[Diagram]) -> tuple[dict[str, int], dict[str, 
     return counts, labels
 
 
-def _ensure_diagram_tags(db: Session, tags: list[str] | None) -> None:
-    for raw in tags or []:
+def _ensure_diagram_tags(db: Session, tags: list[str]) -> None:
+    for raw in tags:
         tag = _clean_tag_name(raw)
         key = tag.lower()
         exists = db.query(DiagramTag).filter(DiagramTag.name_lower == key).one_or_none()
@@ -208,27 +211,16 @@ def _ensure_diagram_tags(db: Session, tags: list[str] | None) -> None:
     db.flush()
 
 
-def _sync_tag_catalog_from_diagrams(
-    db: Session, rows: list[Diagram] | None = None
-) -> None:
-    rows = rows if rows is not None else db.query(Diagram).all()
-    _, labels = _diagram_tag_counts(rows)
-    if not labels:
-        return
-    existing = {
-        row.name_lower
-        for row in db.query(DiagramTag).filter(DiagramTag.name_lower.in_(labels)).all()
-    }
-    for key, label in labels.items():
-        if key not in existing:
-            db.add(DiagramTag(name=label, name_lower=key, color=_random_tag_colour()))
-    db.flush()
-
-
 def _replace_tag_on_diagrams(db: Session, old_name: str, new_name: str) -> int:
     old_key = old_name.lower()
     changed = 0
-    for diagram in db.query(Diagram).all():
+    pattern = _tag_json_text_like_pattern(old_key)
+    candidates = (
+        db.query(Diagram)
+        .filter(func.lower(func.cast(Diagram.tags, String)).like(pattern, escape="\\"))
+        .all()
+    )
+    for diagram in candidates:
         tags = []
         seen: set[str] = set()
         did_change = False
@@ -255,89 +247,70 @@ def _replace_tag_on_diagrams(db: Session, old_name: str, new_name: str) -> int:
 
 
 def _require_admin_role(db: Session, user: User) -> None:
-    if _effective_role(db, user) != "admin":
+    if _effective_role(db, user) != ROLE_ADMIN:
         raise HTTPException(status_code=403, detail="Admin access required")
 
 
-def _ensure_not_dangerous_xml(
-    xml: str,
-    *,
-    expected_hint: str | None = None,
-    allow_svg_doctype: bool = False,
-) -> str:
-    value = str(xml or "").strip()
+# ---------------------------------------------------------------------------
+# Diagram source validation
+# ---------------------------------------------------------------------------
+#
+# Every check below that reads user text is linear in its length: plain
+# searches and single-character classes only, never a repeat followed by
+# something it must find later, which a search would retry from every start
+# position (tests/test_diagram_validation.py times the costliest inputs).
+
+
+def _has_control_characters(value: str) -> bool:
+    """NUL and the C0 controls other than tab, line feed and carriage return:
+    PostgreSQL text cannot hold NUL, and none belongs in diagram source."""
+    return any((ord(ch) < 32 and ch not in "\t\n\r") or ch == "\x7f" for ch in value)
+
+
+def _has_markup_tag(value: str) -> bool:
+    """Whether the text holds something a browser would read as a tag: "<"
+    followed by a letter, "/" or "!", with a ">" somewhere after it."""
+    start = 0
+    while True:
+        index = value.find("<", start)
+        if index < 0 or index + 1 >= len(value):
+            return False
+        following = value[index + 1]
+        if following.isascii() and (following.isalpha() or following in "/!"):
+            return value.find(">", index + 2) >= 0
+        start = index + 1
+
+
+def _validate_bpmn_xml(xml: str | None) -> str:
+    value = (xml or "").strip()
     if not value:
-        raise HTTPException(status_code=400, detail="XML must not be empty")
-    lower = value.lower()
-    if "<!entity" in lower or "<?xml-stylesheet" in lower:
+        raise HTTPException(status_code=400, detail="BPMN XML must not be empty")
+    try:
+        root = parse_untrusted_xml(value, strict=True)
+    except ET.ParseError:
         raise HTTPException(
             status_code=400,
-            detail="ENTITY and xml-stylesheet declarations are not allowed",
-        )
-    if "<!doctype" in lower:
-        if not allow_svg_doctype:
-            raise HTTPException(
-                status_code=400, detail="DOCTYPE declarations are not allowed"
-            )
-        doctype_match = re.search(r"<!doctype\s+svg\b[^>]*>", value, flags=re.I | re.S)
-        if not doctype_match or "[" in doctype_match.group(0):
-            raise HTTPException(
-                status_code=400,
-                detail="SVG DOCTYPE with an internal subset is not allowed",
-            )
-        value = value[: doctype_match.start()] + value[doctype_match.end() :]
-    try:
-        root = ET.fromstring(value)
-    except ET.ParseError as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid XML: {exc}") from exc
-    if expected_hint and expected_hint not in str(root.tag).lower():
-        raise HTTPException(status_code=400, detail=f"Expected {expected_hint} XML")
+            detail=(
+                "BPMN XML must be well-formed, at most 3 MiB, and hold no "
+                "document type declaration or processing instruction"
+            ),
+        ) from None
+    if root.tag != f"{{{BPMN_NS}}}definitions":
+        raise HTTPException(status_code=400, detail="Expected BPMN definitions XML")
     return value
-
-
-def _validate_bpmn_xml(xml: str) -> str:
-    return _ensure_not_dangerous_xml(xml, expected_hint="definitions")
 
 
 def _validate_svg_xml(svg: str | None) -> str | None:
-    if svg is None:
+    """The stored form of a browser-rendered SVG: rebuilt from an allowlist."""
+    if svg is None or not svg.strip():
         return None
-    value = _ensure_not_dangerous_xml(svg, expected_hint="svg", allow_svg_doctype=True)
     try:
-        root = ET.fromstring(value)
-    except ET.ParseError as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid SVG XML: {exc}") from exc
-
-    forbidden_elements = {
-        "script", "foreignobject", "iframe", "object", "embed", "audio", "video"
-    }
-    link_attributes = {"href", "{http://www.w3.org/1999/xlink}href"}
-    for element in root.iter():
-        tag = str(element.tag).rsplit("}", 1)[-1].lower()
-        if tag in forbidden_elements:
-            raise HTTPException(status_code=400, detail=f"Unsafe SVG element: {tag}")
-        for raw_name, raw_value in element.attrib.items():
-            name = str(raw_name).lower()
-            attr_value = str(raw_value or "").strip()
-            if name.startswith("on"):
-                raise HTTPException(status_code=400, detail="SVG event handlers are not allowed")
-            if name in link_attributes:
-                normalized = re.sub(r"[\x00-\x20]+", "", attr_value).lower()
-                if normalized and not normalized.startswith("#"):
-                    raise HTTPException(status_code=400, detail="External SVG links are not allowed")
-            if name == "style" and re.search(
-                r"(?:url\s*\(|expression\s*\(|@import)", attr_value, flags=re.I
-            ):
-                raise HTTPException(status_code=400, detail="Unsafe SVG style is not allowed")
-    return value
+        return sanitise_svg(svg)
+    except SvgError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
 def _validate_rendered_svg_for_save(svg: str | None, diagram_label: str) -> str:
-    if not str(svg or "").strip():
-        raise HTTPException(
-            status_code=400,
-            detail=f"Validate the {diagram_label} before saving. Fix any syntax errors and try again.",
-        )
     value = _validate_svg_xml(svg)
     if not value:
         raise HTTPException(
@@ -392,21 +365,26 @@ def _normalize_visibility(value: str | None) -> str:
 
 
 def _diagram_visibility(row: Diagram) -> str:
-    value = getattr(row, "visibility", None)
-    if value in {"private", "internal", "public"}:
-        return value
+    if row.visibility in {"private", "internal", "public"}:
+        return row.visibility
     return "private"
 
 
-def _is_public_diagram(row: Diagram) -> bool:
-    return _diagram_visibility(row) == "public"
+def _is_public_diagram(db: Session, row: Diagram) -> bool:
+    """Public in effect: marked public while the installation offers public
+    diagrams. Turning the feature off withdraws every public link at once."""
+    return _diagram_visibility(row) == "public" and is_enabled("public_diagrams", db)
 
 
-def _validate_sequence_text(text: str | None) -> str:
-    value = str(text or "").strip()
+def _validate_text_source(text: str | None, label: str) -> str:
+    value = (text or "").strip()
     if not value:
+        raise HTTPException(status_code=400, detail=f"{label} code must not be empty")
+    if len(value) > MAX_TEXT_SOURCE_CHARS:
+        raise HTTPException(status_code=413, detail=f"{label} code is too long")
+    if _has_control_characters(value):
         raise HTTPException(
-            status_code=400, detail="Sequence diagram code must not be empty"
+            status_code=400, detail=f"{label} code contains control characters"
         )
     lower = value.lower()
     if (
@@ -416,9 +394,14 @@ def _validate_sequence_text(text: str | None) -> str:
         or "<!doctype" in lower
     ):
         raise HTTPException(
-            status_code=400, detail="Sequence diagram code contains unsafe markup"
+            status_code=400, detail=f"{label} code contains unsafe markup"
         )
-    if re.search(r"<[a-zA-Z/!][^>]*>", value):
+    return value
+
+
+def _validate_sequence_text(text: str | None) -> str:
+    value = _validate_text_source(text, "Sequence diagram")
+    if _has_markup_tag(value):
         raise HTTPException(
             status_code=400,
             detail="HTML markup is not allowed in sequence diagram code",
@@ -427,20 +410,7 @@ def _validate_sequence_text(text: str | None) -> str:
 
 
 def _validate_flowchart_text(text: str | None) -> str:
-    value = str(text or "").strip()
-    if not value:
-        raise HTTPException(status_code=400, detail="Flowchart code must not be empty")
-    lower = value.lower()
-    if (
-        "<script" in lower
-        or "javascript:" in lower
-        or "<?xml" in lower
-        or "<!doctype" in lower
-    ):
-        raise HTTPException(
-            status_code=400, detail="Flowchart code contains unsafe markup"
-        )
-    return value
+    return _validate_text_source(text, "Flowchart")
 
 
 def _source_for_create(payload: DiagramCreatePayload) -> tuple[str, str, str | None]:
@@ -487,14 +457,12 @@ def _source_for_save(
             _validate_rendered_svg_for_save(payload.svg_xml, "flowchart"),
         )
     source = payload.bpmn_xml or payload.source_text
-    if not source:
-        raise HTTPException(status_code=400, detail="BPMN XML must not be empty")
     return diagram_type, _validate_bpmn_xml(source), _validate_svg_xml(payload.svg_xml)
 
 
 def _version_source(row: DiagramVersion | None, diagram_type: str | None) -> str:
     normalized_type = _normalize_diagram_type(
-        diagram_type or getattr(row, "diagram_type", None) or "bpmn"
+        diagram_type or (row.diagram_type if row else None) or "bpmn"
     )
     if normalized_type == "sequence":
         if not row:
@@ -526,18 +494,54 @@ def _version_text_columns(diagram_type: str, source_text: str) -> dict[str, str 
     }
 
 
+def _source_download(diagram: Diagram, ver: DiagramVersion | None) -> Response:
+    """A diagram's source as an attachment, typed so no browser runs it."""
+    diagram_type = diagram.diagram_type or "bpmn"
+    if diagram_type == "flowchart":
+        source, ext, media = _version_source(ver, "flowchart"), "mmd", "text/plain"
+    elif diagram_type == "sequence":
+        source, ext, media = _version_source(ver, "sequence"), "wsd", "text/plain"
+    else:
+        # XML can carry XHTML a browser would run, so it is never served as
+        # XML; the file keeps its .bpmn name.
+        source, ext, media = _version_source(ver, "bpmn"), "bpmn", "application/xml"
+    return Response(
+        source,
+        media_type=attachment_media_type(media),
+        headers={
+            "Content-Disposition": content_disposition_attachment(
+                f"{diagram.slug or diagram.uuid}.{ext}"
+            )
+        },
+    )
+
+
+def _svg_download(diagram: Diagram, ver: DiagramVersion | None) -> Response:
+    if not ver or not ver.svg_xml:
+        raise HTTPException(
+            status_code=404, detail="No SVG export stored for this diagram"
+        )
+    return Response(
+        ver.svg_xml,
+        media_type=attachment_media_type("image/svg+xml"),
+        headers={
+            "Content-Disposition": content_disposition_attachment(
+                f"{diagram.slug or diagram.uuid}.svg"
+            ),
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+        },
+    )
+
+
 def _new_public_token() -> str:
     return secrets.token_urlsafe(36)
 
 
-def _absolute_url(path: str, request: Request | None = None) -> str:
-    base = (settings.public_base_url or "").strip().rstrip("/")
-    if not base and request is not None:
-        try:
-            base = str(request.base_url).rstrip("/")
-        except Exception:
-            base = ""
-    return f"{base}{path}" if base else path
+def _absolute_url(path: str) -> str | None:
+    """A link for mail: only from MIDENA_PUBLIC_BASE_URL, never from a request's
+    Host header, which the client chooses."""
+    base = settings.public_base_url.strip().rstrip("/")
+    return f"{base}{path}" if base else None
 
 
 def _effective_role(db: Session, user: User) -> str:
@@ -545,22 +549,20 @@ def _effective_role(db: Session, user: User) -> str:
 
 
 def _can_read_private(db: Session, user: User) -> bool:
-    return _effective_role(db, user) == "admin" or has_permission(
+    return _effective_role(db, user) == ROLE_ADMIN or has_permission(
         db, user, PERM_DIAGRAM_READ_PRIVATE
     )
 
 
 def _require_perm(db: Session, user: User, code: str, label: str) -> None:
-    if _effective_role(db, user) == "admin":
+    if _effective_role(db, user) == ROLE_ADMIN:
         return
     if not has_permission(db, user, code):
         raise HTTPException(status_code=403, detail=f"{label} permission required")
 
 
-def _diagram_query_for_user(db: Session, user: User | None):
+def _diagram_query_for_user(db: Session, user: User):
     qry = db.query(Diagram)
-    if user is None:
-        return qry.filter(Diagram.visibility == "public")
     if _can_read_private(db, user):
         return qry
     shared_ids = db.query(DiagramShare.diagram_id).filter(
@@ -575,11 +577,7 @@ def _diagram_query_for_user(db: Session, user: User | None):
     )
 
 
-def _share_for_user(
-    db: Session, diagram: Diagram, user: User | None
-) -> DiagramShare | None:
-    if user is None:
-        return None
+def _share_for_user(db: Session, diagram: Diagram, user: User) -> DiagramShare | None:
     return (
         db.query(DiagramShare)
         .filter(DiagramShare.diagram_id == diagram.id, DiagramShare.user_id == user.id)
@@ -588,48 +586,52 @@ def _share_for_user(
 
 
 def _can_manage_sharing(db: Session, diagram: Diagram, user: User) -> bool:
-    return _effective_role(db, user) == "admin" or diagram.created_by_user_id == user.id
+    return (
+        _effective_role(db, user) == ROLE_ADMIN or diagram.created_by_user_id == user.id
+    )
 
 
 def _can_delete_diagram(db: Session, diagram: Diagram, user: User) -> bool:
-    return _effective_role(db, user) == "admin" or diagram.created_by_user_id == user.id
+    return (
+        _effective_role(db, user) == ROLE_ADMIN or diagram.created_by_user_id == user.id
+    )
 
 
 def _can_write_diagram(db: Session, diagram: Diagram, user: User) -> bool:
-    if _effective_role(db, user) == "admin":
+    if _effective_role(db, user) == ROLE_ADMIN:
         return True
+    if not has_permission(db, user, PERM_DIAGRAM_WRITE):
+        return False
     if diagram.created_by_user_id == user.id:
-        return has_permission(db, user, PERM_DIAGRAM_WRITE)
+        return True
     share = _share_for_user(db, diagram, user)
-    return bool(
-        share
-        and share.role == "editor"
-        and has_permission(db, user, PERM_DIAGRAM_WRITE)
-    )
+    return share is not None and share.role == "editor"
 
 
-def _get_public_diagram(
-    db: Session, diagram_uuid: str, public_token: str | None
-) -> Diagram:
+def _parse_diagram_uuid(diagram_ref: str) -> uuid.UUID:
+    """Diagrams are addressed by UUID only; anything else names no diagram."""
     try:
-        val = uuid.UUID(str(diagram_uuid))
-    except Exception as exc:
-        raise HTTPException(status_code=404, detail="Diagram not found") from exc
-    token = str(public_token or "").strip()
-    if not token:
-        raise HTTPException(
-            status_code=404, detail="Diagram not found or public token missing"
-        )
+        return uuid.UUID(diagram_ref)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Diagram not found") from None
+
+
+def _get_public_diagram(db: Session, diagram_uuid: str, public_token: str) -> Diagram:
+    """A public diagram, by its UUID and its public token together. Every
+    refusal is the same 404, so an answer says nothing about which part was
+    wrong or whether the diagram exists."""
+    val = _parse_diagram_uuid(diagram_uuid)
+    token = public_token.strip()
+    if not token or len(token) > 96 or not is_enabled("public_diagrams", db):
+        raise HTTPException(status_code=404, detail="Diagram not found")
     diagram = (
         db.query(Diagram)
-        .filter(
-            Diagram.uuid == val,
-            Diagram.visibility == "public",
-            Diagram.public_token == token,
-        )
+        .filter(Diagram.uuid == val, Diagram.visibility == "public")
         .one_or_none()
     )
-    if not diagram:
+    if diagram is None or not secrets.compare_digest(
+        diagram.public_token.encode(), token.encode()
+    ):
         raise HTTPException(status_code=404, detail="Diagram not found")
     return diagram
 
@@ -637,29 +639,23 @@ def _get_public_diagram(
 def _get_diagram(
     db: Session,
     diagram_ref: str,
-    user: User | None = None,
+    user: User,
     *,
     require_write: bool = False,
+    for_update: bool = False,
 ) -> Diagram:
-    qry = _diagram_query_for_user(db, user)
-    try:
-        val = uuid.UUID(str(diagram_ref))
-        qry = qry.filter(Diagram.uuid == val)
-    except Exception:
-        qry = (
-            qry.filter(Diagram.id == int(diagram_ref))
-            if str(diagram_ref).isdigit()
-            else qry.filter(Diagram.slug == diagram_ref)
-        )
+    qry = _diagram_query_for_user(db, user).filter(
+        Diagram.uuid == _parse_diagram_uuid(diagram_ref)
+    )
+    if for_update:
+        # Saves, locks and visibility changes to one diagram take its row in
+        # turn, so version numbers and lock ownership cannot race.
+        qry = qry.with_for_update(of=Diagram)
     diagram = qry.one_or_none()
     if not diagram:
         raise HTTPException(status_code=404, detail="Diagram not found")
-    if require_write:
-        assert user is not None
-        if not _can_write_diagram(db, diagram, user):
-            raise HTTPException(
-                status_code=403, detail="Diagram write permission required"
-            )
+    if require_write and not _can_write_diagram(db, diagram, user):
+        raise HTTPException(status_code=403, detail="Diagram write permission required")
     return diagram
 
 
@@ -670,20 +666,17 @@ def _folder_is_descendant(
     current = maybe_descendant_id
     seen: set[int] = set()
     while current is not None and current not in seen:
-        if int(current) == int(folder_id):
+        if current == folder_id:
             return True
-        seen.add(int(current))
-        parent_id = (
-            db.query(Folder.parent_id).filter(Folder.id == int(current)).scalar()
-        )
-        current = parent_id
+        seen.add(current)
+        current = db.query(Folder.parent_id).filter(Folder.id == current).scalar()
     return False
 
 
 def _get_folder(db: Session, folder_id: int | None) -> Folder | None:
     if folder_id is None:
         return None
-    folder = db.query(Folder).filter(Folder.id == int(folder_id)).one_or_none()
+    folder = db.query(Folder).filter(Folder.id == folder_id).one_or_none()
     if not folder:
         raise HTTPException(status_code=400, detail="folder_id does not exist")
     return folder
@@ -693,7 +686,10 @@ def _current_version(db: Session, diagram: Diagram) -> DiagramVersion | None:
     if diagram.current_version_id:
         row = (
             db.query(DiagramVersion)
-            .filter(DiagramVersion.id == diagram.current_version_id)
+            .filter(
+                DiagramVersion.id == diagram.current_version_id,
+                DiagramVersion.diagram_id == diagram.id,
+            )
             .one_or_none()
         )
         if row:
@@ -712,7 +708,7 @@ def _active_lock(db: Session, diagram: Diagram) -> DiagramLock | None:
     )
     if not lock:
         return None
-    if lock.expires_at and lock.expires_at < datetime.utcnow():
+    if lock.expires_at and lock.expires_at < utc_now_naive():
         db.delete(lock)
         db.flush()
         return None
@@ -727,13 +723,13 @@ def _ensure_lock_allows_write(db: Session, diagram: Diagram, user: User) -> None
 
 def _folder_to_dict(row: Folder) -> dict:
     return {
-        "id": int(row.id),
+        "id": row.id,
         "uuid": str(row.uuid),
         "name": row.name,
         "slug": row.slug,
         "description": row.description,
         "parent_id": row.parent_id,
-        "sort_order": int(row.sort_order or 0),
+        "sort_order": row.sort_order,
         "created_at": row.created_at,
         "updated_at": row.updated_at,
     }
@@ -742,26 +738,25 @@ def _folder_to_dict(row: Folder) -> dict:
 def _diagram_summary(db: Session, row: Diagram) -> dict:
     ver = _current_version(db, row)
     lock = _active_lock(db, row)
+    public = _is_public_diagram(db, row)
     return {
-        "id": int(row.id),
+        "id": row.id,
         "uuid": str(row.uuid),
-        "diagram_type": getattr(row, "diagram_type", "bpmn") or "bpmn",
+        "diagram_type": row.diagram_type or "bpmn",
         "name": row.name,
         "slug": row.slug,
         "description": row.description,
         "folder_id": row.folder_id,
-        "folder_name": getattr(row.folder, "name", None),
+        "folder_name": row.folder.name if row.folder else None,
         "visibility": _diagram_visibility(row),
-        "public_token": row.public_token if _is_public_diagram(row) else None,
+        "public_token": row.public_token if public else None,
         "tags": list(row.tags or []),
         "current_version_id": row.current_version_id,
-        "current_version_number": int(ver.version_number) if ver else None,
+        "current_version_number": ver.version_number if ver else None,
         "created_by_user_id": row.created_by_user_id,
         "locked": bool(lock),
-        "locked_by": (
-            getattr(getattr(lock, "user", None), "username", None) if lock else None
-        ),
-        "lock_expires_at": getattr(lock, "expires_at", None),
+        "locked_by": lock.user.username if lock and lock.user else None,
+        "lock_expires_at": lock.expires_at if lock else None,
         "created_at": row.created_at,
         "updated_at": row.updated_at,
     }
@@ -769,7 +764,7 @@ def _diagram_summary(db: Session, row: Diagram) -> dict:
 
 def _entity_link_to_dict(row: DiagramEntityLink) -> dict:
     return {
-        "id": int(row.id),
+        "id": row.id,
         "element_id": row.element_id,
         "entity_type": row.entity_type,
         "entity_ref": row.entity_ref,
@@ -795,14 +790,12 @@ def _entity_links_for_diagram(db: Session, diagram_id: int) -> list[dict]:
 
 def _metadata_link_to_dict(row: DiagramMetadataLink) -> dict:
     return {
-        "id": int(row.id),
+        "id": row.id,
         "label": row.label,
         "url": row.url,
         "notes": row.notes,
         "created_by_user_id": row.created_by_user_id,
-        "created_by_username": getattr(
-            getattr(row, "created_by", None), "username", None
-        ),
+        "created_by_username": row.created_by.username if row.created_by else None,
         "created_at": row.created_at,
         "updated_at": row.updated_at,
     }
@@ -818,26 +811,14 @@ def _metadata_links_for_diagram(db: Session, diagram_id: int) -> list[dict]:
     return [_metadata_link_to_dict(row) for row in rows]
 
 
-def _user_notification_email(db: Session, user: User) -> str | None:
-    if (user.email or "").strip():
-        return str(user.email).strip()
-    row = (
-        db.query(UserEmail)
-        .filter(UserEmail.user_id == user.id)
-        .order_by(UserEmail.is_primary.desc(), UserEmail.email.asc())
-        .first()
-    )
-    return str(row.email).strip() if row and row.email else None
-
-
-def _share_to_dict(row: DiagramShare) -> dict:
-    email = getattr(row.user, "email", None)
+def _share_to_dict(row: DiagramShare, *, with_email: bool) -> dict:
     return {
-        "id": int(row.id),
-        "diagram_id": int(row.diagram_id),
-        "user_id": int(row.user_id),
-        "username": getattr(row.user, "username", None),
-        "email": email,
+        "id": row.id,
+        "diagram_id": row.diagram_id,
+        "user_id": row.user_id,
+        "username": row.user.username if row.user else None,
+        # Account addresses are shown to those who manage the sharing only.
+        "email": row.user.email if with_email and row.user else None,
         "role": row.role,
         "created_at": row.created_at,
         "updated_at": row.updated_at,
@@ -845,92 +826,135 @@ def _share_to_dict(row: DiagramShare) -> dict:
 
 
 def _resolve_share_user(db: Session, identifier: str) -> User:
-    raw = str(identifier or "").strip()
-    if not raw:
+    """The one active account named exactly, by username or account e-mail,
+    case aside. The identifier is compared as text, never as a pattern."""
+    lowered = identifier.strip().lower()
+    if not lowered:
         raise HTTPException(status_code=400, detail="User identifier is required")
-    lowered = raw.lower()
-    user = (
+    matches = (
         db.query(User)
-        .filter(or_(User.username.ilike(raw), User.email.ilike(lowered)))
-        .one_or_none()
-    )
-    if not user:
-        email_row = (
-            db.query(UserEmail).filter(UserEmail.email_lower == lowered).one_or_none()
+        .filter(
+            User.is_active.is_(True),
+            or_(
+                func.lower(User.username) == lowered, func.lower(User.email) == lowered
+            ),
         )
-        if email_row:
-            user = db.query(User).filter(User.id == email_row.user_id).one_or_none()
-    if not user or not user.is_active:
+        .limit(2)
+        .all()
+    )
+    if len(matches) != 1:
         raise HTTPException(status_code=404, detail="Active user not found")
-    return user
+    return matches[0]
+
+
+def _chrome(db: Session) -> GlobalDiagramChrome | None:
+    return db.get(GlobalDiagramChrome, 1)
 
 
 def _diagram_detail(
-    db: Session, row: Diagram, *, include_xml: bool = True, user: User | None = None
+    db: Session, row: Diagram, *, include_xml: bool = True, user: User
 ) -> dict:
     data = _diagram_summary(db, row)
     ver = _current_version(db, row)
-    chrome = (
-        db.query(GlobalDiagramChrome).filter(GlobalDiagramChrome.id == 1).one_or_none()
-    )
+    chrome = _chrome(db)
+    public = _is_public_diagram(db, row)
     data.update(
         {
             "header_text": (
                 row.header_text
                 if row.header_text is not None
-                else getattr(chrome, "header_text", None)
+                else (chrome.header_text if chrome else None)
             ),
             "footer_text": (
                 row.footer_text
                 if row.footer_text is not None
-                else getattr(chrome, "footer_text", None)
+                else (chrome.footer_text if chrome else None)
             ),
-            "embed_url": (
-                f"/embed/{row.uuid}/{row.public_token}"
-                if _is_public_diagram(row)
-                else None
-            ),
+            "embed_url": f"/embed/{row.uuid}/{row.public_token}" if public else None,
             "public_view_url": (
                 f"/public/diagrams/{row.uuid}/{row.public_token}.html"
-                if _is_public_diagram(row)
+                if public
                 else None
             ),
             "entity_links": _entity_links_for_diagram(db, row.id),
             "metadata_links": _metadata_links_for_diagram(db, row.id),
             "diagram_theme": normalise_diagram_theme(
-                getattr(chrome, "theme_settings", None)
+                chrome.theme_settings if chrome else None
             ),
+            "can_delete": _can_delete_diagram(db, row, user),
+            "can_write": _can_write_diagram(db, row, user),
         }
     )
-    if user is not None:
-        data["can_delete"] = _can_delete_diagram(db, row, user)
     if include_xml:
-        current_type = (ver.diagram_type if ver else row.diagram_type) or "bpmn"
-        current_source = _version_source(ver, current_type)
-        data.update(
-            {
-                "bpmn_xml": (
-                    current_source
-                    if current_type != "bpmn"
-                    else _version_source(ver, "bpmn")
-                ),
-                "source_text": current_source,
-                "sequence_text": current_source if current_type == "sequence" else None,
-                "flowchart_text": (
-                    current_source if current_type == "flowchart" else None
-                ),
-                "svg_xml": ver.svg_xml if ver else None,
-            }
-        )
+        data.update(_source_fields(row, ver))
     return data
+
+
+def _source_fields(row: Diagram, ver: DiagramVersion | None) -> dict:
+    current_type = (ver.diagram_type if ver else row.diagram_type) or "bpmn"
+    current_source = _version_source(ver, current_type)
+    return {
+        "bpmn_xml": (
+            current_source if current_type != "bpmn" else _version_source(ver, "bpmn")
+        ),
+        "source_text": current_source,
+        "sequence_text": current_source if current_type == "sequence" else None,
+        "flowchart_text": current_source if current_type == "flowchart" else None,
+        "svg_xml": ver.svg_xml if ver else None,
+    }
+
+
+def _public_diagram_detail(db: Session, row: Diagram) -> dict:
+    """What a public link shows: the drawing, its title and chrome, and the
+    links readers follow. No account identifiers, sharing, locks, notes or
+    who made the links."""
+    ver = _current_version(db, row)
+    chrome = _chrome(db)
+    return {
+        "uuid": str(row.uuid),
+        "diagram_type": row.diagram_type or "bpmn",
+        "name": row.name,
+        "description": row.description,
+        "visibility": "public",
+        "tags": list(row.tags or []),
+        "current_version_number": ver.version_number if ver else None,
+        "updated_at": row.updated_at,
+        "header_text": (
+            row.header_text
+            if row.header_text is not None
+            else (chrome.header_text if chrome else None)
+        ),
+        "footer_text": (
+            row.footer_text
+            if row.footer_text is not None
+            else (chrome.footer_text if chrome else None)
+        ),
+        "entity_links": [
+            {
+                "id": link["id"],
+                "element_id": link["element_id"],
+                "label": link["label"],
+                "url": link["url"],
+            }
+            for link in _entity_links_for_diagram(db, row.id)
+        ],
+        "metadata_links": [
+            {"id": link["id"], "label": link["label"], "url": link["url"]}
+            for link in _metadata_links_for_diagram(db, row.id)
+        ],
+        "diagram_theme": normalise_diagram_theme(
+            chrome.theme_settings if chrome else None
+        ),
+        **_source_fields(row, ver),
+    }
 
 
 def _version_to_dict(row: DiagramVersion, *, include_xml: bool = False) -> dict:
     data = {
-        "id": int(row.id),
-        "diagram_id": int(row.diagram_id),
-        "version_number": int(row.version_number),
-        "diagram_type": getattr(row, "diagram_type", "bpmn") or "bpmn",
+        "id": row.id,
+        "diagram_id": row.diagram_id,
+        "version_number": row.version_number,
+        "diagram_type": row.diagram_type or "bpmn",
         "change_summary": row.change_summary,
         "created_by_user_id": row.created_by_user_id,
         "created_at": row.created_at,
@@ -999,7 +1023,7 @@ def create_folder(
 
 @router.patch("/v1/folders/{folder_id}")
 def update_folder(
-    folder_id: int,
+    folder_id: DbId,
     payload: FolderUpdatePayload,
     request: Request,
     user: User = Depends(get_request_user),
@@ -1049,7 +1073,7 @@ def update_folder(
 
 @router.delete("/v1/folders/{folder_id}")
 def delete_folder(
-    folder_id: int,
+    folder_id: DbId,
     request: Request,
     user: User = Depends(get_request_user),
     db: Session = Depends(get_db),
@@ -1080,41 +1104,41 @@ def delete_folder(
 
 @router.get("/v1/diagrams")
 def list_diagrams(
-    q: str | None = None,
-    folder_id: int | None = None,
-    visibility: str | None = None,
-    diagram_type: str | None = None,
-    tags: str | None = None,
-    limit: int = 50,
-    offset: int = 0,
+    q: Annotated[str | None, Query(max_length=200)] = None,
+    folder_id: Annotated[int | None, Query(ge=1, le=DB_INT_MAX)] = None,
+    visibility: Annotated[str | None, Query(max_length=32)] = None,
+    diagram_type: Annotated[str | None, Query(max_length=32)] = None,
+    tags: Annotated[str | None, Query(max_length=2000)] = None,
+    limit: PageLimit = 50,
+    offset: PageOffset = 0,
     user: User = Depends(get_request_user),
     db: Session = Depends(get_db),
 ):
-    limit = max(1, min(int(limit or 50), 200))
-    offset = max(0, int(offset or 0))
     qry = _diagram_query_for_user(db, user)
     if folder_id is not None:
-        qry = qry.filter(Diagram.folder_id == int(folder_id))
+        qry = qry.filter(Diagram.folder_id == folder_id)
     if visibility:
         qry = qry.filter(Diagram.visibility == _normalize_visibility(visibility))
     if diagram_type:
         qry = qry.filter(Diagram.diagram_type == _normalize_diagram_type(diagram_type))
     selected_tags = [
-        t.strip().lower() for t in re.split(r"[,\n]", tags or "") if t.strip()
-    ]
+        t.strip().lower() for t in (tags or "").replace("\n", ",").split(",")
+    ][:20]
+    selected_tags = [t for t in selected_tags if t]
     for tag in selected_tags:
         qry = qry.filter(
             func.lower(func.cast(Diagram.tags, String)).like(
                 _tag_json_text_like_pattern(tag), escape="\\"
             )
         )
-    if q:
-        needle = f"%{q.strip()}%"
+    if q and q.strip():
+        # Searched as text: % and _ in the query are literal characters.
+        needle = q.strip()
         qry = qry.filter(
             or_(
-                Diagram.name.ilike(needle),
-                Diagram.description.ilike(needle),
-                func.cast(Diagram.tags, String).ilike(needle),
+                Diagram.name.icontains(needle, autoescape=True),
+                Diagram.description.icontains(needle, autoescape=True),
+                func.cast(Diagram.tags, String).icontains(needle, autoescape=True),
             )
         )
     total = qry.order_by(None).count()
@@ -1178,7 +1202,7 @@ def create_tag(
     row = DiagramTag(
         name=name,
         name_lower=key,
-        color=_normalise_tag_colour(payload.color),
+        color=payload.color or _random_tag_colour(),
     )
     db.add(row)
     db.flush()
@@ -1200,14 +1224,14 @@ def create_tag(
 
 @router.patch("/v1/tags/{tag_id}")
 def update_tag(
-    tag_id: int,
+    tag_id: DbId,
     payload: DiagramTagUpdatePayload,
     request: Request,
     user: User = Depends(get_request_user),
     db: Session = Depends(get_db),
 ):
     _require_admin_role(db, user)
-    row = db.query(DiagramTag).filter(DiagramTag.id == int(tag_id)).one_or_none()
+    row = db.query(DiagramTag).filter(DiagramTag.id == tag_id).one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail="Tag not found")
     before = _tag_to_dict(row)
@@ -1226,7 +1250,7 @@ def update_tag(
             row.name = new_name
             row.name_lower = new_key
     if "color" in payload.model_fields_set:
-        row.color = _normalise_tag_colour(payload.color)
+        row.color = payload.color or _random_tag_colour()
     db.add(row)
     db.flush()
     record_entity_changelog(
@@ -1247,30 +1271,59 @@ def update_tag(
 
 @router.get("/v1/users/search")
 def search_users(
-    q: str = "",
-    user: User = Depends(get_request_user),
+    q: Annotated[str, Query(max_length=160)] = "",
+    _: User = Depends(get_request_user),
     db: Session = Depends(get_db),
 ):
-    _ = user
-    needle = f"%{str(q or '').strip()}%"
-    qry = db.query(User).filter(User.is_active.is_(True))
-    if q:
-        qry = qry.filter(or_(User.username.ilike(needle), User.email.ilike(needle)))
-    rows = qry.order_by(User.username.asc()).limit(20).all()
-    return {
-        "items": [
-            {"id": row.id, "username": row.username, "email": row.email} for row in rows
-        ]
-    }
+    """Usernames for the share dialog. Two characters at least, and usernames
+    only: account e-mail addresses are not listed to other accounts."""
+    needle = q.strip()
+    if len(needle) < 2:
+        return {"items": []}
+    rows = (
+        db.query(User)
+        .filter(
+            User.is_active.is_(True),
+            User.username.icontains(needle, autoescape=True),
+        )
+        .order_by(User.username.asc())
+        .limit(20)
+        .all()
+    )
+    return {"items": [{"id": row.id, "username": row.username} for row in rows]}
 
 
 @router.get("/v1/diagram-ai/status")
-def get_diagram_ai_status(_: User = Depends(get_request_user)):
-    return diagram_ai_status()
+def get_diagram_ai_status(
+    _: User = Depends(get_request_user), db: Session = Depends(get_db)
+):
+    status = diagram_ai_status()
+    if not is_enabled("ai_generation", db):
+        status = {**status, "enabled": False, "model": None}
+    return status
 
 
 def _ai_rate_limit_id(user: User) -> str:
     return f"diagram_ai:user:{int(user.id)}"
+
+
+_SEQUENCE_KEYWORDS = (
+    "sequencediagram",
+    "participant",
+    "actor",
+    "title",
+    "note left",
+    "note right",
+    "note over",
+    "loop",
+    "alt",
+    "opt",
+    "par",
+    "critical",
+    "break",
+    "rect",
+    "end",
+)
 
 
 def _validate_ai_generated_code(diagram_type: str, code: str) -> str:
@@ -1280,19 +1333,16 @@ def _validate_ai_generated_code(diagram_type: str, code: str) -> str:
             status_code=502, detail="The AI provider returned empty diagram code"
         )
     if diagram_type == "flowchart":
-        if not re.match(r"^\s*(?:flowchart|graph)\b", value, flags=re.I):
+        if not value.lower().startswith(("flowchart", "graph")):
             # MIDENA can render a bare edge list by prefixing a directive client-side,
             # but saved AI output should be a complete, portable Mermaid document.
             value = f"flowchart LR\n{value}"
         return _validate_flowchart_text(value)
     if diagram_type == "sequence":
-        looks_like_sequence = bool(
-            re.search(
-                r"(?im)^\s*(sequenceDiagram|participant|actor|title|note\s+(?:left|right|over)|loop|alt|opt|par|critical|break|rect|end)\b",
-                value,
-            )
-            or re.search(r"[-<]+>{1,2}|-->{1,2}|-->>|->>|--x|-x", value)
-        )
+        looks_like_sequence = any(
+            line.strip().lower().startswith(_SEQUENCE_KEYWORDS)
+            for line in value.splitlines()
+        ) or any(arrow in value for arrow in ("->", "<>", "-x"))
         if not looks_like_sequence:
             raise HTTPException(
                 status_code=502,
@@ -1305,7 +1355,7 @@ def _validate_ai_generated_code(diagram_type: str, code: str) -> str:
     )
 
 
-async def _generate_ai_diagram_code(
+def _generate_ai_diagram_code(
     payload: DiagramAIGeneratePayload,
     user: User,
     db: Session,
@@ -1319,31 +1369,32 @@ async def _generate_ai_diagram_code(
             status_code=400,
             detail="AI generation is available for sequence diagrams and flowcharts",
         )
-    if not diagram_ai_status().get("enabled"):
+    if not diagram_ai_status()["enabled"]:
         raise HTTPException(
-            status_code=503,
-            detail="AI diagram generation is not configured. Set MIDENA_AI_API_KEY and MIDENA_AI_MODEL.",
+            status_code=503, detail="AI diagram generation is not configured."
         )
     if diagram is not None:
         _ensure_lock_allows_write(db, diagram, user)
+    # The request's session holds no transaction across the provider call.
+    db.commit()
 
-    limit_id = _ai_rate_limit_id(user)
-    allowed, info = check_rate_limit(
-        db,
-        limit_id,
-        max_attempts=max(1, int(settings.ai_rate_limit_attempts or 30)),
-        window_seconds=max(60, int(settings.ai_rate_limit_window_seconds or 3600)),
+    # Counted when admitted, in its own transaction: requests sent together
+    # cannot share one opening, and a failure later does not uncount it.
+    allowed, retry_after = take_rate_limit(
+        _ai_rate_limit_id(user),
+        max_attempts=settings.ai_rate_limit_attempts,
+        window_seconds=settings.ai_rate_limit_window_seconds,
     )
     if not allowed:
         raise HTTPException(
             status_code=429,
-            detail=f"AI generation rate limit exceeded. Try again in {info.get('retry_after', 0)} seconds.",
+            detail="AI generation limit reached. Try again later.",
+            headers={"Retry-After": str(retry_after)},
         )
-    record_rate_limit_attempt(db, limit_id)
 
-    messages = [m.model_dump() for m in (payload.messages or [])]
-    if payload.prompt and str(payload.prompt).strip():
-        messages.append({"role": "user", "content": str(payload.prompt).strip()})
+    messages = [m.model_dump() for m in payload.messages]
+    if payload.prompt and payload.prompt.strip():
+        messages.append({"role": "user", "content": payload.prompt.strip()})
     if not messages:
         raise HTTPException(status_code=400, detail="Prompt is required")
 
@@ -1356,8 +1407,15 @@ async def _generate_ai_diagram_code(
             )
 
     try:
-        code = await generate_diagram_code(
-            diagram_type=diagram_type, messages=messages, current_source=current_source
+        # Sync route: database work stays off the event loop, and the
+        # provider call runs on it.
+        code = anyio.from_thread.run(
+            partial(
+                generate_diagram_code,
+                diagram_type=diagram_type,
+                messages=messages,
+                current_source=current_source,
+            )
         )
     except DiagramAIError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -1366,24 +1424,29 @@ async def _generate_ai_diagram_code(
     return {"diagram_type": diagram_type, "code": code, "status": diagram_ai_status()}
 
 
-@router.post("/v1/diagram-ai/generate")
-async def generate_new_diagram_ai_code(
+@router.post(
+    "/v1/diagram-ai/generate", dependencies=[Depends(require_feature("ai_generation"))]
+)
+def generate_new_diagram_ai_code(
     payload: DiagramAIGeneratePayload,
     user: User = Depends(get_request_user),
     db: Session = Depends(get_db),
 ):
-    return await _generate_ai_diagram_code(payload, user, db)
+    return _generate_ai_diagram_code(payload, user, db)
 
 
-@router.post("/v1/diagrams/{diagram_ref}/ai/generate")
-async def generate_existing_diagram_ai_code(
+@router.post(
+    "/v1/diagrams/{diagram_ref}/ai/generate",
+    dependencies=[Depends(require_feature("ai_generation"))],
+)
+def generate_existing_diagram_ai_code(
     diagram_ref: str,
     payload: DiagramAIGeneratePayload,
     user: User = Depends(get_request_user),
     db: Session = Depends(get_db),
 ):
     diagram = _get_diagram(db, diagram_ref, user, require_write=True)
-    return await _generate_ai_diagram_code(payload, user, db, diagram=diagram)
+    return _generate_ai_diagram_code(payload, user, db, diagram=diagram)
 
 
 @router.post("/v1/diagrams")
@@ -1397,7 +1460,7 @@ def create_diagram(
     _get_folder(db, payload.folder_id)
     diagram_type, source_text, svg_xml = _source_for_create(payload)
     visibility = _normalize_visibility(payload.visibility)
-    _ensure_diagram_tags(db, list(payload.tags or []))
+    _ensure_diagram_tags(db, payload.tags)
     diagram = Diagram(
         name=payload.name.strip(),
         slug=_slugify(payload.name),
@@ -1406,7 +1469,7 @@ def create_diagram(
         diagram_type=diagram_type,
         visibility=visibility,
         public_token=_new_public_token(),
-        tags=list(payload.tags or []),
+        tags=payload.tags,
         header_text=(payload.header_text or None),
         footer_text=(payload.footer_text or None),
         created_by_user_id=user.id,
@@ -1474,7 +1537,6 @@ def clone_diagram(
     )
     if not source_version:
         raise HTTPException(status_code=400, detail="Diagram has no version to clone")
-    _get_folder(db, source.folder_id)
     _ensure_diagram_tags(db, list(source.tags or []))
 
     clone = Diagram(
@@ -1483,7 +1545,9 @@ def clone_diagram(
         description=source.description,
         folder_id=source.folder_id,
         diagram_type=source_version.diagram_type or source.diagram_type or "bpmn",
-        visibility=_diagram_visibility(source),
+        # A copy belongs to whoever made it: it starts private, whatever the
+        # source's visibility, and carries none of the source's sharing.
+        visibility="private",
         public_token=_new_public_token(),
         tags=list(source.tags or []),
         header_text=source.header_text,
@@ -1534,18 +1598,6 @@ def clone_diagram(
                 created_by_user_id=user.id,
             )
         )
-    for share in source.shares or []:
-        if int(share.user_id) == int(user.id):
-            continue
-        db.add(
-            DiagramShare(
-                diagram_id=clone.id,
-                user_id=share.user_id,
-                role=share.role,
-                created_by_user_id=user.id,
-            )
-        )
-
     db.add(clone)
     db.flush()
     record_entity_changelog(
@@ -1592,7 +1644,7 @@ def update_diagram(
     user: User = Depends(get_request_user),
     db: Session = Depends(get_db),
 ):
-    diagram = _get_diagram(db, diagram_ref, user, require_write=True)
+    diagram = _get_diagram(db, diagram_ref, user, require_write=True, for_update=True)
     _ensure_lock_allows_write(db, diagram, user)
     before = diagram_changelog_state(diagram)
     if payload.name is not None:
@@ -1604,11 +1656,14 @@ def update_diagram(
         _get_folder(db, payload.folder_id)
         diagram.folder_id = payload.folder_id
     if "visibility" in payload.model_fields_set:
-        diagram.visibility = _normalize_visibility(payload.visibility)
-        if diagram.visibility == "public" and not diagram.public_token:
+        visibility = _normalize_visibility(payload.visibility)
+        if diagram.visibility == "public" and visibility != "public":
+            # Withdrawing a diagram from public view retires its public links
+            # for good: making it public again issues new ones.
             diagram.public_token = _new_public_token()
+        diagram.visibility = visibility
     if payload.tags is not None:
-        diagram.tags = list(payload.tags or [])
+        diagram.tags = payload.tags
         _ensure_diagram_tags(db, diagram.tags)
     if "header_text" in payload.model_fields_set:
         diagram.header_text = payload.header_text
@@ -1640,14 +1695,14 @@ def delete_diagram(
     user: User = Depends(get_request_user),
     db: Session = Depends(get_db),
 ):
-    diagram = _get_diagram(db, diagram_ref, user)
+    diagram = _get_diagram(db, diagram_ref, user, for_update=True)
     if not _can_delete_diagram(db, diagram, user):
         raise HTTPException(
             status_code=403,
             detail="Only the diagram owner or an admin can delete this diagram",
         )
     before = diagram_changelog_state(diagram)
-    did = int(diagram.id)
+    did = diagram.id
     db.delete(diagram)
     record_entity_changelog(
         db,
@@ -1682,18 +1737,19 @@ def list_versions(
 
 @router.get("/v1/diagram-versions/{version_id}")
 def get_version(
-    version_id: int,
+    version_id: DbId,
     user: User = Depends(get_request_user),
     db: Session = Depends(get_db),
 ):
-    ver = (
-        db.query(DiagramVersion)
-        .filter(DiagramVersion.id == int(version_id))
-        .one_or_none()
-    )
+    ver = db.query(DiagramVersion).filter(DiagramVersion.id == version_id).one_or_none()
     if not ver:
         raise HTTPException(status_code=404, detail="Version not found")
-    _get_diagram(db, str(ver.diagram.uuid), user)
+    try:
+        _get_diagram(db, str(ver.diagram.uuid), user)
+    except HTTPException:
+        # A version of a diagram the reader cannot see answers as one that
+        # does not exist.
+        raise HTTPException(status_code=404, detail="Version not found") from None
     return _version_to_dict(ver, include_xml=True)
 
 
@@ -1705,11 +1761,13 @@ def save_diagram(
     user: User = Depends(get_request_user),
     db: Session = Depends(get_db),
 ):
-    diagram = _get_diagram(db, diagram_ref, user, require_write=True)
-    _ensure_lock_allows_write(db, diagram, user)
+    # Validation first, outside the row lock.
+    peek = _get_diagram(db, diagram_ref, user, require_write=True)
     diagram_type, source_text, svg_xml = _source_for_save(
-        payload, getattr(diagram, "diagram_type", "bpmn") or "bpmn"
+        payload, peek.diagram_type or "bpmn"
     )
+    diagram = _get_diagram(db, diagram_ref, user, require_write=True, for_update=True)
+    _ensure_lock_allows_write(db, diagram, user)
     before = diagram_changelog_state(diagram)
     max_version = (
         db.query(func.max(DiagramVersion.version_number))
@@ -1719,7 +1777,7 @@ def save_diagram(
     )
     ver = DiagramVersion(
         diagram_id=diagram.id,
-        version_number=int(max_version) + 1,
+        version_number=max_version + 1,
         diagram_type=diagram_type,
         source_text=source_text,
         bpmn_xml=source_text,
@@ -1733,7 +1791,7 @@ def save_diagram(
     diagram.current_version_id = ver.id
     diagram.diagram_type = diagram_type
     diagram.updated_by_user_id = user.id
-    diagram.updated_at = datetime.utcnow()
+    diagram.updated_at = utc_now_naive()
     db.add(diagram)
     db.flush()
     record_entity_changelog(
@@ -1770,9 +1828,9 @@ def lock_diagram(
     user: User = Depends(get_request_user),
     db: Session = Depends(get_db),
 ):
-    diagram = _get_diagram(db, diagram_ref, user, require_write=True)
-    now = datetime.utcnow()
-    ttl = int(payload.ttl_seconds or 900)
+    diagram = _get_diagram(db, diagram_ref, user, require_write=True, for_update=True)
+    now = utc_now_naive()
+    ttl = payload.ttl_seconds or 900
     lock = _active_lock(db, diagram)
     if lock and lock.user_id != user.id:
         raise HTTPException(status_code=423, detail="Diagram is locked by another user")
@@ -1798,9 +1856,10 @@ def unlock_diagram(
     user: User = Depends(get_request_user),
     db: Session = Depends(get_db),
 ):
-    diagram = _get_diagram(db, diagram_ref, user)
+    diagram = _get_diagram(db, diagram_ref, user, for_update=True)
     lock = _active_lock(db, diagram)
     if not lock:
+        db.commit()
         return {"ok": True, "already_unlocked": True}
     if lock.user_id != user.id and _effective_role(db, user) != "admin":
         raise HTTPException(
@@ -1895,17 +1954,13 @@ def create_comment(
 
 @router.patch("/v1/comments/{comment_id}")
 def update_comment(
-    comment_id: int,
+    comment_id: DbId,
     payload: DiagramCommentUpdatePayload,
     request: Request,
     user: User = Depends(get_request_user),
     db: Session = Depends(get_db),
 ):
-    row = (
-        db.query(DiagramComment)
-        .filter(DiagramComment.id == int(comment_id))
-        .one_or_none()
-    )
+    row = db.query(DiagramComment).filter(DiagramComment.id == comment_id).one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail="Comment not found")
     _get_diagram(db, str(row.diagram.uuid), user)
@@ -1924,7 +1979,7 @@ def update_comment(
     if payload.body is not None:
         row.body = payload.body.strip()
     if payload.is_resolved is not None:
-        row.is_resolved = bool(payload.is_resolved)
+        row.is_resolved = payload.is_resolved
     db.add(row)
     db.flush()
     after = {
@@ -1951,16 +2006,12 @@ def update_comment(
 
 @router.delete("/v1/comments/{comment_id}")
 def delete_comment(
-    comment_id: int,
+    comment_id: DbId,
     request: Request,
     user: User = Depends(get_request_user),
     db: Session = Depends(get_db),
 ):
-    row = (
-        db.query(DiagramComment)
-        .filter(DiagramComment.id == int(comment_id))
-        .one_or_none()
-    )
+    row = db.query(DiagramComment).filter(DiagramComment.id == comment_id).one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail="Comment not found")
     _get_diagram(db, str(row.diagram.uuid), user)
@@ -2019,11 +2070,17 @@ def create_entity_link(
         entity_ref=(payload.entity_ref or str(uuid.uuid4())).strip(),
         label=label,
         url=payload.url,
-        metadata_json=payload.metadata or {},
+        metadata_json=payload.metadata,
         created_by_user_id=user.id,
     )
     db.add(row)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409, detail="That element already has this link"
+        ) from None
     record_entity_changelog(
         db,
         entity_type="diagram_entity_link",
@@ -2049,14 +2106,14 @@ def create_entity_link(
 
 @router.delete("/v1/entity-links/{link_id}")
 def delete_entity_link(
-    link_id: int,
+    link_id: DbId,
     request: Request,
     user: User = Depends(get_request_user),
     db: Session = Depends(get_db),
 ):
     row = (
         db.query(DiagramEntityLink)
-        .filter(DiagramEntityLink.id == int(link_id))
+        .filter(DiagramEntityLink.id == link_id)
         .one_or_none()
     )
     if not row:
@@ -2132,14 +2189,14 @@ def create_metadata_link(
 
 @router.delete("/v1/metadata-links/{link_id}")
 def delete_metadata_link(
-    link_id: int,
+    link_id: DbId,
     request: Request,
     user: User = Depends(get_request_user),
     db: Session = Depends(get_db),
 ):
     row = (
         db.query(DiagramMetadataLink)
-        .filter(DiagramMetadataLink.id == int(link_id))
+        .filter(DiagramMetadataLink.id == link_id)
         .one_or_none()
     )
     if not row:
@@ -2175,10 +2232,11 @@ def list_diagram_shares(
         .order_by(DiagramShare.updated_at.desc())
         .all()
     )
+    can_manage = _can_manage_sharing(db, diagram, user)
     return {
-        "can_manage": _can_manage_sharing(db, diagram, user),
+        "can_manage": can_manage,
         "owner_user_id": diagram.created_by_user_id,
-        "items": [_share_to_dict(row) for row in rows],
+        "items": [_share_to_dict(row, with_email=can_manage) for row in rows],
     }
 
 
@@ -2190,7 +2248,7 @@ def share_diagram(
     user: User = Depends(get_request_user),
     db: Session = Depends(get_db),
 ):
-    diagram = _get_diagram(db, diagram_ref, user)
+    diagram = _get_diagram(db, diagram_ref, user, for_update=True)
     if not _can_manage_sharing(db, diagram, user):
         raise HTTPException(
             status_code=403,
@@ -2217,14 +2275,16 @@ def share_diagram(
     row.role = payload.role
     db.add(row)
     db.flush()
-    notify_email = _user_notification_email(db, target)
-    if payload.notify and notify_email:
-        url = _absolute_url(f"/diagram.html?id={diagram.uuid}", request)
+    if payload.notify and target.email:
+        # Queued in this transaction: the notice goes out only if the share
+        # is saved, and the request never waits on a mail server.
         send_diagram_share_email(
-            to_email=notify_email,
+            db=db,
+            user_id=target.id,
+            to_email=target.email,
             diagram_name=diagram.name,
             shared_by=user.username,
-            diagram_url=url,
+            diagram_url=_absolute_url(f"/diagram.html?id={diagram.uuid}"),
             role=row.role,
         )
     record_entity_changelog(
@@ -2233,24 +2293,24 @@ def share_diagram(
         entity_id=row.id,
         action="updated",
         before=None,
-        after=_share_to_dict(row),
+        after=_share_to_dict(row, with_email=True),
         user=user,
         request_method=request.method,
         request_path=request.url.path,
     )
     db.commit()
     db.refresh(row)
-    return _share_to_dict(row)
+    return _share_to_dict(row, with_email=True)
 
 
 @router.delete("/v1/diagram-shares/{share_id}")
 def delete_diagram_share(
-    share_id: int,
+    share_id: DbId,
     request: Request,
     user: User = Depends(get_request_user),
     db: Session = Depends(get_db),
 ):
-    row = db.query(DiagramShare).filter(DiagramShare.id == int(share_id)).one_or_none()
+    row = db.query(DiagramShare).filter(DiagramShare.id == share_id).one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail="Share not found")
     diagram = _get_diagram(db, str(row.diagram.uuid), user)
@@ -2259,7 +2319,7 @@ def delete_diagram_share(
             status_code=403,
             detail="Only the diagram author or an admin can manage sharing",
         )
-    before = _share_to_dict(row)
+    before = _share_to_dict(row, with_email=True)
     db.delete(row)
     record_entity_changelog(
         db,
@@ -2276,24 +2336,92 @@ def delete_diagram_share(
     return {"ok": True}
 
 
-@router.post("/v1/diagrams/{diagram_ref}/export/google-drive")
+@router.post(
+    "/v1/diagrams/{diagram_ref}/export/google-drive",
+    dependencies=[Depends(require_feature("google_drive_export"))],
+)
 def export_google_drive(
     diagram_ref: str,
     payload: GoogleDriveExportPayload,
+    request: Request,
     user: User = Depends(get_request_user),
     db: Session = Depends(get_db),
 ):
+    """Send one export of a readable diagram to the installation's Drive folder.
+
+    Source and SVG are taken from the stored version, never from the request.
+    PNG, JPEG and PDF are drawn by the browser, so their bytes are checked
+    against the format's signature and size. The folder and the file's name
+    come from configuration and the diagram, never from the request.
+    """
     _require_perm(db, user, PERM_DIAGRAM_EXPORT, "Diagram export")
-    _get_diagram(db, diagram_ref, user)
-    try:
-        return upload_base64_to_drive(
-            content_base64=payload.content_base64,
-            filename=payload.filename,
-            mime_type=payload.mime_type,
-            folder_id=payload.folder_id,
+    diagram = _get_diagram(db, diagram_ref, user)
+    if not google_drive.configured():
+        raise HTTPException(
+            status_code=503, detail="Google Drive export is not configured."
         )
-    except GoogleDriveExportError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    fmt = google_drive.FORMATS[payload.format]
+    ver = _current_version(db, diagram)
+    if payload.format == "source":
+        content = _version_source(ver, diagram.diagram_type).encode("utf-8")
+        extension = {"flowchart": "mmd", "sequence": "wsd"}.get(
+            diagram.diagram_type, "bpmn"
+        )
+    elif payload.format == "svg":
+        if not ver or not ver.svg_xml:
+            raise HTTPException(
+                status_code=404, detail="No SVG export stored for this diagram"
+            )
+        content, extension = ver.svg_xml.encode("utf-8"), "svg"
+    else:
+        try:
+            content = base64.b64decode(payload.content_base64 or "", validate=True)
+        except (binascii.Error, ValueError):
+            raise HTTPException(
+                status_code=400, detail="Export content is not valid base64"
+            ) from None
+        if len(content) > google_drive.MAX_EXPORT_BYTES:
+            raise HTTPException(status_code=413, detail="Export is too large")
+        if not content.startswith(fmt.magic):
+            raise HTTPException(
+                status_code=400, detail=f"Export content is not a {fmt.extension} file"
+            )
+        extension = fmt.extension
+    # The request's session holds no transaction across the upload.
+    db.commit()
+    allowed, retry_after = take_rate_limit(
+        f"google_drive_export:user:{user.id}",
+        max_attempts=settings.google_drive_exports_per_hour,
+        window_seconds=3600,
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="Google Drive export limit reached. Try again later.",
+            headers={"Retry-After": str(retry_after)},
+        )
+    name = f"{_slugify(diagram.name)}-v{ver.version_number if ver else 1}.{extension}"
+    try:
+        created = google_drive.upload(name=name, fmt=fmt, content=content)
+    except google_drive.GoogleDriveExportError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from None
+    record_entity_changelog(
+        db,
+        entity_type="diagram",
+        entity_id=diagram.id,
+        action="exported",
+        before=None,
+        after={
+            "name": diagram.name,
+            "export_format": payload.format,
+            "google_drive_file_id": created["id"],
+        },
+        user=user,
+        request_method=request.method,
+        request_path=request.url.path,
+    )
+    db.commit()
+    return created
 
 
 @router.get("/v1/diagrams/{diagram_ref}/changelog")
@@ -2308,54 +2436,38 @@ def diagram_changelog(
     )
 
 
-@router.get("/v1/public/diagrams/{diagram_uuid}/{public_token}")
+@router.get(
+    "/v1/public/diagrams/{diagram_uuid}/{public_token}",
+    dependencies=[Depends(require_feature("public_diagrams"))],
+)
 def public_diagram_json(
     diagram_uuid: str, public_token: str, db: Session = Depends(get_db)
 ):
-    diagram = _get_public_diagram(db, diagram_uuid, public_token)
-    return _diagram_detail(db, diagram)
+    return _public_diagram_detail(
+        db, _get_public_diagram(db, diagram_uuid, public_token)
+    )
 
 
 @router.get(
-    "/v1/public/diagrams/{diagram_uuid}/{public_token}/bpmn",
-    response_class=PlainTextResponse,
+    "/v1/public/diagrams/{diagram_uuid}/{public_token}/source",
+    dependencies=[Depends(require_feature("public_diagrams"))],
 )
-def public_diagram_bpmn(
+def public_diagram_source(
     diagram_uuid: str, public_token: str, db: Session = Depends(get_db)
 ):
     diagram = _get_public_diagram(db, diagram_uuid, public_token)
-    ver = _current_version(db, diagram)
-    if (diagram.diagram_type or "bpmn") == "flowchart":
-        source = _version_source(ver, "flowchart")
-        media = "text/plain"
-    elif (diagram.diagram_type or "bpmn") == "sequence":
-        source = _version_source(ver, "sequence")
-        media = "text/plain"
-    else:
-        source = _version_source(ver, "bpmn")
-        media = "application/xml"
-    return PlainTextResponse(source, media_type=media)
+    return _source_download(diagram, _current_version(db, diagram))
 
 
-@router.get("/v1/public/diagrams/{diagram_uuid}/{public_token}/svg")
+@router.get(
+    "/v1/public/diagrams/{diagram_uuid}/{public_token}/svg",
+    dependencies=[Depends(require_feature("public_diagrams"))],
+)
 def public_diagram_svg(
     diagram_uuid: str, public_token: str, db: Session = Depends(get_db)
 ):
     diagram = _get_public_diagram(db, diagram_uuid, public_token)
-    ver = _current_version(db, diagram)
-    if not ver or not ver.svg_xml:
-        raise HTTPException(
-            status_code=404, detail="No SVG export stored for this diagram"
-        )
-    return Response(
-        ver.svg_xml,
-        media_type="image/svg+xml",
-        headers={
-            "Content-Disposition": f'attachment; filename="{diagram.slug or diagram.uuid}.svg"',
-            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
-            "X-Content-Type-Options": "nosniff",
-        },
-    )
+    return _svg_download(diagram, _current_version(db, diagram))
 
 
 @router.get("/v1/diagrams/{diagram_ref}/export/{fmt}")
@@ -2368,44 +2480,12 @@ def export_diagram(
     _require_perm(db, user, PERM_DIAGRAM_EXPORT, "Diagram export")
     diagram = _get_diagram(db, diagram_ref, user)
     ver = _current_version(db, diagram)
-    fmt = str(fmt or "").lower().strip()
-    if fmt in {"bpmn", "sequence", "txt"}:
-        is_sequence = (diagram.diagram_type or "bpmn") == "sequence"
-        is_flowchart = (diagram.diagram_type or "bpmn") == "flowchart"
-        if is_flowchart:
-            source = _version_source(ver, "flowchart")
-            ext = "mmd"
-            media = "text/plain"
-        elif is_sequence:
-            source = _version_source(ver, "sequence")
-            ext = "wsd"
-            media = "text/plain"
-        else:
-            source = _version_source(ver, "bpmn")
-            ext = "bpmn"
-            media = "application/xml"
-        return Response(
-            source,
-            media_type=media,
-            headers={
-                "Content-Disposition": f'attachment; filename="{diagram.slug or diagram.uuid}.{ext}"'
-            },
-        )
+    fmt = fmt.lower().strip()
+    if fmt in {"bpmn", "sequence", "txt", "source"}:
+        return _source_download(diagram, ver)
     if fmt == "svg":
-        if not ver or not ver.svg_xml:
-            raise HTTPException(
-                status_code=404, detail="No SVG export stored for this diagram"
-            )
-        return Response(
-            ver.svg_xml,
-            media_type="image/svg+xml",
-            headers={
-                "Content-Disposition": f'attachment; filename="{diagram.slug or diagram.uuid}.svg"',
-                "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
-                "X-Content-Type-Options": "nosniff",
-            },
-        )
+        return _svg_download(diagram, ver)
     raise HTTPException(
         status_code=400,
-        detail="Server-side export supports bpmn and svg. PNG/JPG/PDF are exported by the browser UI.",
+        detail="Server-side export supports source and svg. PNG/JPG/PDF are exported by the browser UI.",
     )

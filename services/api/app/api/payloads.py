@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-from typing import Any
 import re
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
+from app.api.deps import DB_INT_MAX
+from app.security.passwords import MAX_PASSWORD_LENGTH
 from app.security.url_safety import validate_safe_href
+
+DbIdItem = Annotated[StrictInt, Field(ge=1, le=DB_INT_MAX)]
 
 # -----------------------------------------------------------------------------
 # Auth / admin
@@ -14,29 +18,23 @@ from app.security.url_safety import validate_safe_href
 
 class LoginPayload(BaseModel):
     username: str = Field(min_length=1, max_length=160)
-    password: str = Field(min_length=8, max_length=200)
+    password: str = Field(min_length=8, max_length=MAX_PASSWORD_LENGTH)
 
 
 class ChangePasswordPayload(BaseModel):
-    current_password: str = Field(min_length=8, max_length=200)
-    new_password: str = Field(min_length=8, max_length=200)
-    confirm_password: str = Field(min_length=8, max_length=200)
+    current_password: str = Field(min_length=8, max_length=MAX_PASSWORD_LENGTH)
+    new_password: str = Field(min_length=8, max_length=MAX_PASSWORD_LENGTH)
+    confirm_password: str = Field(min_length=8, max_length=MAX_PASSWORD_LENGTH)
 
 
-class PasswordResetRequestPayload(BaseModel):
-    identifier: str = Field(min_length=1, max_length=255)
-
-
-class PasswordResetConfirmPayload(BaseModel):
-    token: str = Field(min_length=10, max_length=512)
-    new_password: str = Field(min_length=8, max_length=200)
-    confirm_password: str = Field(min_length=8, max_length=200)
+class AdminSetPasswordPayload(BaseModel):
+    new_password: str = Field(min_length=8, max_length=MAX_PASSWORD_LENGTH)
 
 
 class AdminUserCreatePayload(BaseModel):
     username: str = Field(min_length=1, max_length=160)
     email: str | None = Field(default=None, max_length=255)
-    password: str = Field(min_length=8, max_length=200)
+    password: str = Field(min_length=8, max_length=MAX_PASSWORD_LENGTH)
     role: str = Field(min_length=1, max_length=50)
 
 
@@ -48,21 +46,25 @@ class AdminUserUpdatePayload(BaseModel):
 
 class AdminGroupCreatePayload(BaseModel):
     name: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
     role: str | None = Field(default=None, max_length=50)
 
 
 class AdminGroupUpdatePayload(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=200)
+    name: str | None = Field(default=None, max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
     role: str | None = Field(default=None, max_length=50)
 
 
+# Identifier lists are JSON arrays of integers: a string such as "12" is
+# refused rather than read character by character.
 class AdminUserAccessUpdatePayload(BaseModel):
-    group_ids: list[int] | None = None
-    permission_ids: list[int] | None = None
+    group_ids: list[DbIdItem] = Field(default_factory=list, max_length=500)
+    permission_ids: list[DbIdItem] = Field(default_factory=list, max_length=500)
 
 
 class AdminGroupPermissionsUpdatePayload(BaseModel):
-    permission_ids: list[int] | None = None
+    permission_ids: list[DbIdItem] = Field(default_factory=list, max_length=500)
 
 
 # -----------------------------------------------------------------------------
@@ -72,11 +74,12 @@ class AdminGroupPermissionsUpdatePayload(BaseModel):
 
 class UserPreferencesUpdatePayload(BaseModel):
     node_colors: dict | None = None
-    default_start_page: str | None = None
+    default_start_page: str | None = Field(default=None, max_length=200)
     sticky_enabled: bool | None = None
     auto_apply_enabled: bool | None = None
     diagram_source_collapsed_by_default: bool | None = None
     diagram_sidebar_collapsed_by_default: bool | None = None
+    theme: str | None = Field(default=None, max_length=16)
 
 
 class UserShortcutCreatePayload(BaseModel):
@@ -92,23 +95,60 @@ class UserShortcutCreatePayload(BaseModel):
         return validate_safe_href(s, allow_relative=True)
 
 
-class MeProfileUpdatePayload(BaseModel):
-    email: str | None = Field(default=None, max_length=255)
-
-
-class UserEmailCreatePayload(BaseModel):
-    email: str = Field(min_length=3, max_length=255)
-    is_primary: bool = False
-
-
 # -----------------------------------------------------------------------------
 # MIDENA folders / diagrams
 # -----------------------------------------------------------------------------
+
+# Diagram source and rendered SVG; the request limit for diagram writes is set
+# from these (app.security.request_limits.MAX_DIAGRAM_BODY).
+MAX_SOURCE_CHARS = 3_000_000
+MAX_SVG_CHARS = 4_000_000
+MAX_TAGS = 50
+# Element identifiers come from bpmn-js and Mermaid: XML names and Mermaid
+# node ids. Pages put them into selectors and markup, so they are held to
+# that shape.
+_ELEMENT_ID = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.:-]{0,254}")
+_MAX_METADATA_KEYS = 50
+_MAX_METADATA_VALUE_CHARS = 2000
+
+
+def _clean_element_id(value: Any) -> Any:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if not _ELEMENT_ID.fullmatch(text):
+        raise ValueError("element_id must be letters, digits and _ . : - (at most 255)")
+    return text
+
+
+def _clean_metadata(value: Any) -> dict[str, Any]:
+    """A flat object of short scalar values."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("metadata must be an object")
+    if len(value) > _MAX_METADATA_KEYS:
+        raise ValueError(f"metadata holds at most {_MAX_METADATA_KEYS} entries")
+    out: dict[str, Any] = {}
+    for key, item in value.items():
+        if not isinstance(key, str) or not key or len(key) > 80:
+            raise ValueError("metadata keys must be 1-80 characters")
+        if isinstance(item, str):
+            if len(item) > _MAX_METADATA_VALUE_CHARS:
+                raise ValueError("metadata values are at most 2000 characters")
+        elif item is not None and not isinstance(item, (bool, int, float)):
+            raise ValueError("metadata values must be text, numbers or booleans")
+        out[key] = item
+    return out
 
 
 def _clean_tags(values: list[str] | None) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
+    if len(values or []) > MAX_TAGS:
+        raise ValueError(f"a diagram holds at most {MAX_TAGS} tags")
     for raw in values or []:
         s = str(raw or "").strip()
         if not s:
@@ -225,30 +265,30 @@ class DiagramTagUpdatePayload(BaseModel):
 
 class FolderCreatePayload(BaseModel):
     name: str = Field(min_length=1, max_length=200)
-    parent_id: int | None = Field(default=None, ge=1)
+    parent_id: int | None = Field(default=None, ge=1, le=DB_INT_MAX)
     description: str | None = Field(default=None, max_length=4000)
-    sort_order: int | None = 0
+    sort_order: int = Field(default=0, ge=-1_000_000, le=1_000_000)
 
 
 class FolderUpdatePayload(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
-    parent_id: int | None = Field(default=None, ge=1)
+    parent_id: int | None = Field(default=None, ge=1, le=DB_INT_MAX)
     description: str | None = Field(default=None, max_length=4000)
-    sort_order: int | None = None
+    sort_order: int | None = Field(default=None, ge=-1_000_000, le=1_000_000)
 
 
 class DiagramCreatePayload(BaseModel):
     name: str = Field(min_length=1, max_length=240)
     description: str | None = Field(default=None, max_length=8000)
-    folder_id: int | None = Field(default=None, ge=1)
+    folder_id: int | None = Field(default=None, ge=1, le=DB_INT_MAX)
     visibility: str = "private"
-    tags: list[str] | None = None
+    tags: list[str] = Field(default_factory=list)
     diagram_type: str = "bpmn"
-    bpmn_xml: str | None = Field(default=None, max_length=5_000_000)
-    sequence_text: str | None = Field(default=None, max_length=5_000_000)
-    flowchart_text: str | None = Field(default=None, max_length=5_000_000)
-    source_text: str | None = Field(default=None, max_length=5_000_000)
-    svg_xml: str | None = Field(default=None, max_length=5_000_000)
+    bpmn_xml: str | None = Field(default=None, max_length=MAX_SOURCE_CHARS)
+    sequence_text: str | None = Field(default=None, max_length=MAX_SOURCE_CHARS)
+    flowchart_text: str | None = Field(default=None, max_length=MAX_SOURCE_CHARS)
+    source_text: str | None = Field(default=None, max_length=MAX_SOURCE_CHARS)
+    svg_xml: str | None = Field(default=None, max_length=MAX_SVG_CHARS)
     header_text: str | None = Field(default=None, max_length=4000)
     footer_text: str | None = Field(default=None, max_length=4000)
 
@@ -258,7 +298,7 @@ class DiagramCreatePayload(BaseModel):
         if v is None:
             return []
         if isinstance(v, str):
-            return _clean_tags([x for x in re.split(r"[,\n]", v)])
+            return _clean_tags(v.replace("\n", ",").split(","))
         return _clean_tags(list(v or []))
 
     @field_validator("diagram_type", mode="before")
@@ -275,7 +315,7 @@ class DiagramCreatePayload(BaseModel):
 class DiagramUpdatePayload(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=240)
     description: str | None = Field(default=None, max_length=8000)
-    folder_id: int | None = Field(default=None, ge=1)
+    folder_id: int | None = Field(default=None, ge=1, le=DB_INT_MAX)
     visibility: str | None = None
     tags: list[str] | None = None
     header_text: str | None = Field(default=None, max_length=4000)
@@ -287,7 +327,7 @@ class DiagramUpdatePayload(BaseModel):
         if v is None:
             return None
         if isinstance(v, str):
-            return _clean_tags([x for x in re.split(r"[,\n]", v)])
+            return _clean_tags(v.replace("\n", ",").split(","))
         return _clean_tags(list(v or []))
 
     @field_validator("visibility", mode="before")
@@ -298,11 +338,11 @@ class DiagramUpdatePayload(BaseModel):
 
 class DiagramSavePayload(BaseModel):
     diagram_type: str | None = None
-    bpmn_xml: str | None = Field(default=None, max_length=5_000_000)
-    sequence_text: str | None = Field(default=None, max_length=5_000_000)
-    flowchart_text: str | None = Field(default=None, max_length=5_000_000)
-    source_text: str | None = Field(default=None, max_length=5_000_000)
-    svg_xml: str | None = Field(default=None, max_length=5_000_000)
+    bpmn_xml: str | None = Field(default=None, max_length=MAX_SOURCE_CHARS)
+    sequence_text: str | None = Field(default=None, max_length=MAX_SOURCE_CHARS)
+    flowchart_text: str | None = Field(default=None, max_length=MAX_SOURCE_CHARS)
+    source_text: str | None = Field(default=None, max_length=MAX_SOURCE_CHARS)
+    svg_xml: str | None = Field(default=None, max_length=MAX_SVG_CHARS)
     change_summary: str | None = Field(default=None, max_length=4000)
 
     @field_validator("diagram_type", mode="before")
@@ -328,7 +368,8 @@ class DiagramAIGeneratePayload(BaseModel):
     diagram_type: str = Field(default="flowchart")
     messages: list[DiagramAIMessagePayload] = Field(default_factory=list)
     prompt: str | None = Field(default=None, max_length=20_000)
-    current_source: str | None = Field(default=None, max_length=5_000_000)
+    # Only the first 12,000 characters are sent to the provider.
+    current_source: str | None = Field(default=None, max_length=MAX_SOURCE_CHARS)
 
     @field_validator("diagram_type", mode="before")
     @classmethod
@@ -357,6 +398,11 @@ class DiagramCommentCreatePayload(BaseModel):
     body: str = Field(min_length=1, max_length=4000)
     element_id: str | None = Field(default=None, max_length=255)
 
+    @field_validator("element_id", mode="before")
+    @classmethod
+    def _element(cls, v):
+        return _clean_element_id(v)
+
 
 class DiagramCommentUpdatePayload(BaseModel):
     body: str | None = Field(default=None, min_length=1, max_length=4000)
@@ -369,7 +415,17 @@ class DiagramEntityLinkPayload(BaseModel):
     url: str = Field(min_length=1, max_length=4000)
     entity_type: str | None = Field(default=None, max_length=80)
     entity_ref: str | None = Field(default=None, max_length=512)
-    metadata: dict[str, Any] | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("element_id", mode="before")
+    @classmethod
+    def _element(cls, v):
+        return _clean_element_id(v)
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def _metadata(cls, v):
+        return _clean_metadata(v)
 
     @field_validator("url", mode="before")
     @classmethod
@@ -408,10 +464,15 @@ class DiagramSharePayload(BaseModel):
 
 
 class GoogleDriveExportPayload(BaseModel):
-    filename: str = Field(min_length=1, max_length=255)
-    mime_type: str = Field(min_length=1, max_length=255)
-    content_base64: str = Field(min_length=1, max_length=25_000_000)
-    folder_id: str | None = Field(default=None, max_length=512)
+    """One export to the installation's Drive folder. ``content_base64`` is
+    read for the browser-drawn formats (png, jpg, pdf) only; the folder and
+    the file's name are never the browser's to choose."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    format: Literal["png", "jpg", "pdf", "svg", "source"]
+    # MAX_EXPORT_BYTES (8 MiB) once decoded.
+    content_base64: str | None = Field(default=None, max_length=11_200_000)
 
 
 class GlobalDiagramChromePayload(BaseModel):

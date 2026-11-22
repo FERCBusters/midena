@@ -1,117 +1,943 @@
-(async () => {
-  const { api, requireAuth, toast, escapeHtml, formatDate } = window.MIDENA;
-  const me = await requireAuth();
-  if (me.effective_role !== 'admin') { window.location.href = '/index.html'; return; }
-  const userModal = new bootstrap.Modal(document.getElementById('userModal'));
-  const state = { users: [], auditOffset: 0, changeOffset: 0, limit: 50, chrome: null };
-  const DEFAULT_THEME = {
-    bpmn: { fill_color: '#ffffff', stroke_color: '#344054', text_color: '#1f2937', connector_color: '#667085', border_width: 1.5, connector_width: 1.8, font_family: 'Arial, sans-serif', font_size: 14 },
-    flowchart: { fill_color: '#ffffff', stroke_color: '#2563eb', text_color: '#111827', connector_color: '#64748b', border_width: 1.5, connector_width: 1.8, font_family: 'Arial, sans-serif', font_size: 14 },
-    sequence: { fill_color: '#ffffff', stroke_color: '#2563eb', text_color: '#111827', connector_color: '#475467', border_width: 1.5, connector_width: 1.8, font_family: 'Arial, sans-serif', font_size: 14 },
+(() => {
+  const state = {
+    users: [],
+    groups: [],
+    permissions: [],
+    editingUserAccess: null,
+    editingGroupPerms: null,
+    audit: { items: [], total: 0, limit: 50, offset: 0 },
+    entityChangelog: { items: [], total: 0, limit: 50, offset: 0 },
   };
-  const THEME_TYPES = [
-    ['bpmn', 'BPMN symbols'],
-    ['flowchart', 'Flowchart boxes'],
-    ['sequence', 'WSD participants/messages'],
-  ];
-  const THEME_FIELDS = [
-    ['fill_color', 'Fill colour', 'color'],
-    ['stroke_color', 'Border colour', 'color'],
-    ['text_color', 'Font colour', 'color'],
-    ['connector_color', 'Connector colour', 'color'],
-    ['border_width', 'Border thickness', 'number'],
-    ['connector_width', 'Connector thickness', 'number'],
-    ['font_family', 'Font family', 'text'],
-    ['font_size', 'Font size', 'number'],
-  ];
 
-  function cloneTheme(value = DEFAULT_THEME) {
-    return JSON.parse(JSON.stringify(value));
+  const el = {
+    createUserForm: document.getElementById("createUserForm"),
+    createGroupForm: document.getElementById("createGroupForm"),
+    usersTable: document.getElementById("usersTable"),
+    groupsTable: document.getElementById("groupsTable"),
+    msg: document.getElementById("msg"),
+    auditFilters: document.getElementById("auditFilters"),
+    auditTable: document.getElementById("auditTable"),
+    auditMsg: document.getElementById("auditMsg"),
+    refreshAuditBtn: document.getElementById("refreshAuditBtn"),
+    auditPrevBtn: document.getElementById("auditPrevBtn"),
+    auditNextBtn: document.getElementById("auditNextBtn"),
+    entityChangelogFilters: document.getElementById("entityChangelogFilters"),
+    entityChangelogList: document.getElementById("entityChangelogList"),
+    entityChangelogMsg: document.getElementById("entityChangelogMsg"),
+    refreshEntityChangelogBtn: document.getElementById(
+      "refreshEntityChangelogBtn",
+    ),
+    entityChangelogPrevBtn: document.getElementById("entityChangelogPrevBtn"),
+    entityChangelogNextBtn: document.getElementById("entityChangelogNextBtn"),
+    mailTable: document.getElementById("mailTable"),
+    mailSummary: document.getElementById("mailSummary"),
+    refreshMailBtn: document.getElementById("refreshMailBtn"),
+  };
+
+  // ---- Mail outbox ------------------------------------------------------
+
+  async function loadOutbox() {
+    if (!el.mailTable) return;
+    try {
+      const body = await MIDENA.api("/v1/admin/notifications");
+      el.mailSummary.textContent = `${body.pending} pending · ${body.failed} failed · ${body.notifications.length} rows shown`;
+      if (!body.notifications.length) {
+        el.mailTable.innerHTML =
+          '<div class="small text-muted">Nothing queued. Outgoing mail appears here with its delivery state.</div>';
+        return;
+      }
+      el.mailTable.innerHTML = `<div class="table-responsive"><table class="table table-sm align-middle mb-0">
+      <thead class="table-light"><tr><th>When</th><th>To</th><th>Subject</th><th>Status</th><th>Attempts</th><th>Error</th></tr></thead>
+      <tbody>${body.notifications
+        .map(
+          (
+            n,
+          ) => `<tr><td class="text-wrap">${MIDENA.escapeHtml(fmtDate(n.created_at))}</td>
+          <td>${MIDENA.escapeHtml(n.recipient)}</td>
+          <td>${MIDENA.escapeHtml(n.subject)}</td>
+          <td><span class="badge ${n.status === "sent" ? "text-bg-success" : n.status === "failed" ? "text-bg-danger" : "text-bg-secondary"}">${MIDENA.escapeHtml(n.status)}</span></td>
+          <td>${Number(n.attempts) || 0}</td>
+          <td class="small">${MIDENA.escapeHtml(n.last_error || "")}</td></tr>`,
+        )
+        .join("")}</tbody></table></div>`;
+    } catch (err) {
+      el.mailSummary.textContent = err.message || "Failed to load outbox.";
+    }
   }
 
-  function themeInputId(type, field) {
-    return `theme_${type}_${field}`;
+  function setMessage(message, level = "info") {
+    if (!el.msg) return;
+    el.msg.textContent = message || "";
+    el.msg.className = `small msg-${level}`;
   }
 
-  function renderThemeForm(theme) {
-    const effective = cloneTheme(DEFAULT_THEME);
-    Object.entries(theme || {}).forEach(([type, values]) => {
-      if (!effective[type] || !values || typeof values !== 'object') return;
-      Object.assign(effective[type], values);
+  function roleOptions(selected) {
+    const roles = [
+      "viewer",
+      "engineer",
+      "contributor",
+      "product_owner",
+      "architect",
+      "maintainer",
+      "diagram_admin",
+      "admin",
+      "inherit",
+    ];
+    return roles
+      .map(
+        (r) =>
+          `<option value="${r}" ${selected === r ? "selected" : ""}>${r}</option>`,
+      )
+      .join("");
+  }
+
+  function fmtDate(value) {
+    return window.MIDENA.formatTimestamp(value);
+  }
+
+  const ADMIN_TAB_HASH_TO_ID = Object.freeze({
+    "#access": "tab-access",
+    "#users": "tab-access",
+    "#groups": "tab-access",
+    "#permissions": "tab-access",
+    "#audit": "tab-audit",
+    "#changelog": "tab-audit",
+    "#entity-changelog": "tab-audit",
+    "#features": "tab-features",
+  });
+
+  const AUDIT_SUBTAB_HASH = Object.freeze({
+    "#audit": "subtab-audit",
+    "#changelog": "subtab-changelog",
+    "#entity-changelog": "subtab-changelog",
+  });
+
+  // The inner audit/changelog views are plain divs, not Bootstrap tab-panes,
+  // so this level is switched by hand: reveal the target view, hide the
+  // other, and keep both buttons' active state in step.
+  function showAuditView(which) {
+    const auditView = document.getElementById("auditView");
+    const changelogView = document.getElementById("changelogView");
+    const auditBtn = document.getElementById("subtab-audit");
+    const changelogBtn = document.getElementById("subtab-changelog");
+    if (auditView && changelogView) {
+      auditView.hidden = which !== "audit";
+      changelogView.hidden = which !== "changelog";
+    }
+    if (auditBtn) auditBtn.classList.toggle("active", which === "audit");
+    if (changelogBtn) {
+      changelogBtn.classList.toggle("active", which === "changelog");
+    }
+  }
+
+  function activateAdminTabFromHash() {
+    const hash = (window.location.hash || "").toLowerCase();
+    const tabId = ADMIN_TAB_HASH_TO_ID[hash];
+    if (!tabId) return;
+    const tab = document.getElementById(tabId);
+    if (!tab || !window.bootstrap?.Tab) return;
+    try {
+      window.bootstrap.Tab.getOrCreateInstance(tab).show();
+    } catch (_) {
+      // ignore tab activation failures
+    }
+    // The combined page keeps audit trail and changelog as inner tabs.
+    const subTabId = AUDIT_SUBTAB_HASH[hash];
+    if (subTabId === "subtab-changelog") showAuditView("changelog");
+  }
+
+  function initAdminTabs() {
+    document
+      .getElementById("subtab-audit")
+      ?.addEventListener("click", () => showAuditView("audit"));
+    document
+      .getElementById("subtab-changelog")
+      ?.addEventListener("click", () => showAuditView("changelog"));
+    document
+      .querySelectorAll('#adminTabs button[data-bs-toggle="tab"]')
+      .forEach((button) => {
+        button.addEventListener("shown.bs.tab", (event) => {
+          const id = event.target?.id;
+          const entry = Object.entries(ADMIN_TAB_HASH_TO_ID).find(
+            ([, value]) => value === id,
+          );
+          if (!entry) return;
+          const [hash] = entry;
+          if (window.location.hash !== hash) {
+            window.history.replaceState(null, "", hash);
+          }
+        });
+      });
+    activateAdminTabFromHash();
+    window.addEventListener("hashchange", activateAdminTabFromHash);
+  }
+
+  function paramsFromForm(form, extra = {}) {
+    const params = new URLSearchParams();
+    if (form) {
+      const fd = new FormData(form);
+      fd.forEach((value, key) => {
+        const text = String(value || "").trim();
+        if (text) params.set(key, text);
+      });
+    }
+    Object.entries(extra).forEach(([key, value]) => {
+      if (
+        value !== undefined &&
+        value !== null &&
+        String(value).trim() !== ""
+      ) {
+        params.set(key, String(value));
+      }
     });
-    const html = THEME_TYPES.map(([type, title]) => `
-      <div class="col-12 col-xl-4">
-        <div class="border rounded p-3 h-100 bg-white">
-          <div class="fw-semibold mb-2">${escapeHtml(title)}</div>
-          <div class="row g-2">
-            ${THEME_FIELDS.map(([field, label, inputType]) => {
-              const value = effective[type][field];
-              const attrs = inputType === 'number' ? ' min="0.5" max="28" step="0.1"' : '';
-              return `<div class="col-12 ${inputType === 'color' ? 'col-sm-6' : ''}"><label class="form-label small text-secondary mb-1" for="${themeInputId(type, field)}">${escapeHtml(label)}</label><input class="form-control form-control-sm" id="${themeInputId(type, field)}" data-theme-type="${type}" data-theme-field="${field}" type="${inputType}" value="${escapeHtml(value)}"${attrs}></div>`;
-            }).join('')}
-          </div>
-        </div>
-      </div>`).join('');
-    document.getElementById('diagramThemeForm').innerHTML = html;
+    return params;
   }
 
-  function readThemeForm() {
-    const theme = cloneTheme(DEFAULT_THEME);
-    document.querySelectorAll('[data-theme-type][data-theme-field]').forEach((input) => {
-      const type = input.dataset.themeType;
-      const field = input.dataset.themeField;
-      if (!theme[type]) return;
-      if (['border_width', 'connector_width', 'font_size'].includes(field)) theme[type][field] = Number(input.value);
-      else theme[type][field] = input.value;
+  function statusBadge(status) {
+    const code = Number(status || 0);
+    const cls =
+      code >= 500
+        ? "danger"
+        : code >= 400
+          ? "warning"
+          : code >= 300
+            ? "info"
+            : "success";
+    return `<span class="badge text-bg-${cls}">${MIDENA.escapeHtml(code || "—")}</span>`;
+  }
+
+  function paginationRangeText({ total = 0, offset = 0, items = [] } = {}) {
+    const totalCount = Number(total || 0);
+    const shown = Array.isArray(items) ? items.length : 0;
+    const from =
+      totalCount && shown ? Math.min(Number(offset || 0) + 1, totalCount) : 0;
+    const to =
+      totalCount && shown
+        ? Math.min(Number(offset || 0) + shown, totalCount)
+        : 0;
+    return `Showing ${from}–${to} of ${totalCount}`;
+  }
+
+  function updatePager({ prevBtn, nextBtn, page }) {
+    if (!page) return;
+    const offset = Number(page.offset || 0);
+    const limit = Math.max(1, Number(page.limit || 50));
+    const shown = Array.isArray(page.items) ? page.items.length : 0;
+    const total = Number(page.total || 0);
+    if (prevBtn) prevBtn.disabled = offset <= 0;
+    if (nextBtn) nextBtn.disabled = offset + shown >= total || shown === 0;
+  }
+
+  // The page asked for becomes the current one once it has loaded, so a
+  // failed request leaves the pager on the page still shown.
+  async function loadAuditTrail(offset = state.audit.offset) {
+    if (!el.auditTable) return;
+    el.auditTable.innerHTML =
+      '<div class="small text-muted">Loading audit trail…</div>';
+    const params = paramsFromForm(el.auditFilters, {
+      limit: state.audit.limit,
+      offset,
     });
-    return theme;
+    let data;
+    try {
+      data = await MIDENA.api(`/v1/admin/audit?${params.toString()}`);
+    } catch (err) {
+      renderAuditTrail();
+      throw err;
+    }
+    state.audit = {
+      items: Array.isArray(data?.items) ? data.items : [],
+      total: Number(data?.total || 0),
+      limit: Number(data?.limit || 50),
+      offset: Number(data?.offset || 0),
+    };
+    renderAuditTrail();
+  }
+
+  function renderAuditTrail() {
+    if (!el.auditTable) return;
+    const rows = state.audit.items
+      .map((item) => {
+        const path = item.query_string
+          ? `${item.path}?${item.query_string}`
+          : item.path;
+        return `
+        <tr>
+          <td class="text-nowrap">${MIDENA.escapeHtml(fmtDate(item.ts))}</td>
+          <td>${MIDENA.escapeHtml(item.username || "anonymous")}</td>
+          <td><span class="badge text-bg-secondary">${MIDENA.escapeHtml(item.method || "—")}</span></td>
+          <td class="admin-audit-path-cell"><code class="admin-audit-path-code">${MIDENA.escapeHtml(path || "—")}</code></td>
+          <td>${statusBadge(item.status_code)}</td>
+          <td class="text-nowrap">${MIDENA.escapeHtml(item.duration_ms ?? "—")} ms</td>
+          <td>${MIDENA.escapeHtml(item.client_ip || "—")}</td>
+          <td class="small text-muted">${MIDENA.escapeHtml(item.user_agent || "—")}</td>
+        </tr>
+      `;
+      })
+      .join("");
+    el.auditTable.innerHTML = `
+      <div class="table-responsive">
+        <table class="table table-sm align-middle admin-audit-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>User</th>
+              <th>Method</th>
+              <th>Path</th>
+              <th>Status</th>
+              <th>Duration</th>
+              <th>Client IP</th>
+              <th>User agent</th>
+            </tr>
+          </thead>
+          <tbody>${rows || '<tr><td colspan="8" class="text-muted">No audit entries found.</td></tr>'}</tbody>
+        </table>
+      </div>
+    `;
+    if (el.auditMsg) {
+      el.auditMsg.textContent = paginationRangeText(state.audit);
+    }
+    updatePager({
+      prevBtn: el.auditPrevBtn,
+      nextBtn: el.auditNextBtn,
+      page: state.audit,
+    });
+  }
+
+  async function loadAdminEntityChangelog(
+    offset = state.entityChangelog.offset,
+  ) {
+    if (!el.entityChangelogList) return;
+    el.entityChangelogList.innerHTML =
+      '<div class="small text-muted">Loading changelog…</div>';
+    const params = paramsFromForm(el.entityChangelogFilters, {
+      limit: state.entityChangelog.limit,
+      offset,
+    });
+    let data;
+    try {
+      data = await MIDENA.api(
+        `/v1/admin/entity-changelog?${params.toString()}`,
+      );
+    } catch (err) {
+      renderEntityChangelog();
+      throw err;
+    }
+    state.entityChangelog = {
+      items: Array.isArray(data?.items) ? data.items : [],
+      total: Number(data?.total || 0),
+      limit: Number(data?.limit || 50),
+      offset: Number(data?.offset || 0),
+    };
+    renderEntityChangelog();
+  }
+
+  function renderEntityChangelog() {
+    el.entityChangelogList.innerHTML = MIDENA.entityChangelogHtml(
+      state.entityChangelog.items,
+      {
+        empty: "No entity changelog entries found.",
+      },
+    );
+    if (el.entityChangelogMsg) {
+      el.entityChangelogMsg.textContent = paginationRangeText(
+        state.entityChangelog,
+      );
+    }
+    updatePager({
+      prevBtn: el.entityChangelogPrevBtn,
+      nextBtn: el.entityChangelogNextBtn,
+      page: state.entityChangelog,
+    });
+  }
+
+  async function pageAuditTrail(direction) {
+    const limit = Math.max(1, Number(state.audit.limit || 50));
+    const nextOffset = Math.max(
+      0,
+      Number(state.audit.offset || 0) + direction * limit,
+    );
+    if (nextOffset === state.audit.offset) return;
+    await loadAuditTrail(nextOffset);
+  }
+
+  async function pageEntityChangelog(direction) {
+    const limit = Math.max(1, Number(state.entityChangelog.limit || 50));
+    const nextOffset = Math.max(
+      0,
+      Number(state.entityChangelog.offset || 0) + direction * limit,
+    );
+    if (nextOffset === state.entityChangelog.offset) return;
+    await loadAdminEntityChangelog(nextOffset);
   }
 
   async function loadUsers() {
-    const data = await api('/v1/admin/users'); state.users = data.items || [];
-    document.getElementById('userRows').innerHTML = state.users.map((u) => `<tr><td>${escapeHtml(u.username)}</td><td>${escapeHtml(u.email || '')}</td><td>${escapeHtml(u.effective_role || u.role)}</td><td>${u.is_active ? 'Yes' : 'No'}</td><td class="text-end"><button class="btn btn-sm btn-outline-secondary" data-edit-user="${u.id}">Edit</button></td></tr>`).join('');
-    document.querySelectorAll('[data-edit-user]').forEach((btn) => btn.addEventListener('click', () => editUser(Number(btn.dataset.editUser))));
-  }
-  function editUser(id) {
-    const u = state.users.find((x) => x.id === id); if (!u) return;
-    document.getElementById('userId').value = u.id; document.getElementById('username').value = u.username; document.getElementById('username').disabled = true; document.getElementById('email').value = u.email || ''; document.getElementById('role').value = u.role; document.getElementById('active').checked = !!u.is_active; document.getElementById('passwordWrap').classList.add('d-none'); userModal.show();
-  }
-  document.getElementById('newUserBtn').addEventListener('click', () => { document.getElementById('userForm').reset(); document.getElementById('userId').value = ''; document.getElementById('username').disabled = false; document.getElementById('passwordWrap').classList.remove('d-none'); userModal.show(); });
-  document.getElementById('userForm').addEventListener('submit', async (ev) => { ev.preventDefault(); const id = document.getElementById('userId').value; const body = { email: document.getElementById('email').value || null, role: document.getElementById('role').value, is_active: document.getElementById('active').checked }; if (!id) { body.username = document.getElementById('username').value; body.password = document.getElementById('password').value; } try { await api(id ? `/v1/admin/users/${id}` : '/v1/admin/users', { method: id ? 'PATCH' : 'POST', body }); userModal.hide(); await loadUsers(); } catch (err) { toast(err.message, 'error'); } });
-
-  async function loadLocks() {
-    const data = await api('/v1/admin/diagram-locks');
-    document.getElementById('lockRows').innerHTML = (data.items || []).map((l) => `<tr><td><a href="/diagram.html?id=${encodeURIComponent(l.diagram_uuid)}">${escapeHtml(l.diagram_name)}</a></td><td>${escapeHtml(l.locked_by || '')}</td><td>${formatDate(l.locked_at)}</td><td>${formatDate(l.expires_at)}</td><td class="text-end"><button class="btn btn-sm btn-outline-danger" data-unlock="${l.diagram_id}">Force unlock</button></td></tr>`).join('') || '<tr><td colspan="5" class="text-secondary p-4">No active locks.</td></tr>';
-    document.querySelectorAll('[data-unlock]').forEach((btn) => btn.addEventListener('click', async () => { await api(`/v1/admin/diagrams/${btn.dataset.unlock}/unlock`, { method: 'POST' }); toast('Diagram unlocked.', 'success'); await loadLocks(); }));
+    const data = await MIDENA.api("/v1/admin/users");
+    state.users = Array.isArray(data?.items) ? data.items : [];
   }
 
-  async function loadChrome() {
-    const data = await api('/v1/admin/diagram-chrome');
-    state.chrome = data;
-    document.getElementById('globalHeader').value = data.header_text || '';
-    document.getElementById('globalFooter').value = data.footer_text || '';
-    renderThemeForm(data.theme_settings || DEFAULT_THEME);
+  async function loadGroups() {
+    const data = await MIDENA.api("/v1/admin/groups");
+    state.groups = Array.isArray(data?.items) ? data.items : [];
   }
 
-  async function saveChrome(extra = {}) {
-    state.chrome = await api('/v1/admin/diagram-chrome', {
-      method: 'PUT',
-      body: {
-        header_text: document.getElementById('globalHeader').value,
-        footer_text: document.getElementById('globalFooter').value,
-        ...extra,
-      },
+  async function loadPermissions() {
+    const data = await MIDENA.api("/v1/admin/permissions");
+    state.permissions = Array.isArray(data?.items) ? data.items : [];
+  }
+
+  function userAccessEditorHtml(userId) {
+    if (!state.editingUserAccess || state.editingUserAccess.user_id !== userId)
+      return "";
+
+    const access = state.editingUserAccess;
+    const groupChecks = access.available_groups
+      .map((g) => {
+        const checked = access.group_ids.includes(g.id) ? "checked" : "";
+        const role = g.role ? ` (${g.role})` : "";
+        return `<label class="small" style="display:block"><input type="checkbox" data-kind="group" value="${g.id}" ${checked}/> ${MIDENA.escapeHtml(g.name)}${MIDENA.escapeHtml(role)}</label>`;
+      })
+      .join("");
+
+    const permChecks = access.available_permissions
+      .map((p) => {
+        const checked = access.permission_ids.includes(p.id) ? "checked" : "";
+        const desc = p.description ? ` — ${p.description}` : "";
+        return `<label class="small" style="display:block"><input type="checkbox" data-kind="perm" value="${p.id}" ${checked}/> ${MIDENA.escapeHtml(p.code)}${MIDENA.escapeHtml(desc)}</label>`;
+      })
+      .join("");
+
+    return `
+      <div class="card mt-2">
+        <div class="card-body p-3">
+          <div class="d-flex align-items-center justify-content-between mb-2">
+            <div class="fw-semibold">Edit access for user #${userId}</div>
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-action="cancel-user-access">Close</button>
+          </div>
+          <div class="row g-3">
+            <div class="col-md-4" style="max-height:240px;overflow:auto;">
+              <div class="small fw-semibold mb-2">Groups</div>
+              ${groupChecks || '<span class="small text-muted">No groups</span>'}
+            </div>
+            <div class="col-md-8" style="max-height:240px;overflow:auto;">
+              <div class="small fw-semibold mb-2">Direct permissions</div>
+              ${permChecks || '<span class="small text-muted">No permissions</span>'}
+            </div>
+          </div>
+          <div class="d-flex gap-2 mt-3">
+            <button type="button" class="btn btn-sm btn-primary" data-action="save-user-access" data-user-id="${userId}"><i class="bi bi-shield-check"></i> Save access</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-action="cancel-user-access">Cancel</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderUsers() {
+    const rows = state.users
+      .map((u) => {
+        const username = MIDENA.escapeHtml(u.username);
+        const role = String(u.role || "inherit");
+        const effective = MIDENA.escapeHtml(u.effective_role || "viewer");
+        const disableSelfToggle =
+          MIDENA.state.me?.id === u.id ? "disabled" : "";
+        const disableSelfDelete =
+          MIDENA.state.me?.id === u.id ? "disabled" : "";
+        return `
+          <tr>
+            <td>${username}</td>
+            <td>
+              <input class="form-control form-control-sm" data-field="email" data-user-id="${u.id}" value="${MIDENA.escapeHtml(u.email || "")}" placeholder="email (optional)" />
+            </td>
+            <td>
+              <select class="form-select form-select-sm" data-field="role" data-user-id="${u.id}">
+                ${roleOptions(role)}
+              </select>
+            </td>
+            <td>${effective}</td>
+            <td><input class="form-check-input" type="checkbox" data-field="active" data-user-id="${u.id}" ${u.is_active ? "checked" : ""} ${disableSelfToggle}></td>
+            <td>${fmtDate(u.last_login_at)}</td>
+            <td>
+              <div class="d-flex flex-wrap gap-2">
+                <button type="button" class="btn btn-sm btn-primary" data-action="save-user" data-user-id="${u.id}"><i class="bi bi-save"></i> Save</button>
+                <button type="button" class="btn btn-sm btn-outline-primary" data-action="edit-user-access" data-user-id="${u.id}"><i class="bi bi-key"></i> Access</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary" data-action="reset-password" data-user-id="${u.id}"><i class="bi bi-asterisk"></i> Reset password</button>
+                <button type="button" class="btn btn-sm btn-outline-danger" data-action="delete-user" data-user-id="${u.id}" ${disableSelfDelete}><i class="bi bi-trash"></i> Delete</button>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td colspan="7">${userAccessEditorHtml(u.id)}</td>
+          </tr>
+        `;
+      })
+      .join("");
+
+    el.usersTable.innerHTML = `
+      <div class="table-responsive">
+        <table class="table table-sm align-middle">
+          <thead>
+            <tr>
+              <th>Username</th>
+              <th>Email</th>
+              <th style="width:160px;">Role</th>
+              <th>Effective</th>
+              <th style="width:80px;">Active</th>
+              <th>Last login</th>
+              <th style="width:280px;">Actions</th>
+            </tr>
+          </thead>
+          <tbody>${rows || '<tr><td colspan="7" class="text-muted">No users found.</td></tr>'}</tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  function groupPermEditorHtml(groupId) {
+    if (
+      !state.editingGroupPerms ||
+      state.editingGroupPerms.group_id !== groupId
+    )
+      return "";
+    const payload = state.editingGroupPerms;
+
+    const checks = payload.available_permissions
+      .map((p) => {
+        const checked = payload.permission_ids.includes(p.id) ? "checked" : "";
+        const desc = p.description ? ` — ${p.description}` : "";
+        return `<label class="small" style="display:block"><input type="checkbox" data-kind="perm" value="${p.id}" ${checked}/> ${MIDENA.escapeHtml(p.code)}${MIDENA.escapeHtml(desc)}</label>`;
+      })
+      .join("");
+
+    return `
+      <div class="card mt-2">
+        <div class="card-body p-3">
+          <div class="d-flex align-items-center justify-content-between mb-2">
+            <div class="fw-semibold">Edit permissions for group #${groupId}</div>
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-action="cancel-group-perms">Close</button>
+          </div>
+          <div style="max-height:240px;overflow:auto;">${checks || '<span class="small text-muted">No permissions</span>'}</div>
+          <div class="d-flex gap-2 mt-3">
+            <button type="button" class="btn btn-sm btn-primary" data-action="save-group-perms" data-group-id="${groupId}"><i class="bi bi-save"></i> Save permissions</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-action="cancel-group-perms">Cancel</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderGroups() {
+    const rows = state.groups
+      .map((g) => {
+        return `
+          <tr>
+            <td>${MIDENA.escapeHtml(g.name)}</td>
+            <td>
+              <input class="form-control form-control-sm" data-field="group-name" data-group-id="${g.id}" value="${MIDENA.escapeHtml(g.name)}" />
+            </td>
+            <td>
+              <input class="form-control form-control-sm" data-field="group-description" data-group-id="${g.id}" value="${MIDENA.escapeHtml(g.description || "")}" placeholder="description (optional)" />
+            </td>
+            <td>
+              <select class="form-select form-select-sm" data-field="group-role" data-group-id="${g.id}">
+                <option value="" ${!g.role ? "selected" : ""}>(no role)</option>
+                <option value="viewer" ${g.role === "viewer" ? "selected" : ""}>viewer</option>
+                <option value="engineer" ${g.role === "engineer" ? "selected" : ""}>engineer</option>
+                <option value="contributor" ${g.role === "contributor" ? "selected" : ""}>contributor</option>
+                <option value="product_owner" ${g.role === "product_owner" ? "selected" : ""}>product_owner</option>
+                <option value="architect" ${g.role === "architect" ? "selected" : ""}>architect</option>
+                <option value="maintainer" ${g.role === "maintainer" ? "selected" : ""}>maintainer</option>
+                <option value="admin" ${g.role === "admin" ? "selected" : ""}>admin</option>
+              </select>
+            </td>
+            <td>${g.member_count ?? 0}</td>
+            <td>${g.permission_count ?? 0}</td>
+            <td>
+              <div class="d-flex flex-wrap gap-2">
+                <button type="button" class="btn btn-sm btn-primary" data-action="save-group" data-group-id="${g.id}"><i class="bi bi-save"></i> Save</button>
+                <button type="button" class="btn btn-sm btn-outline-primary" data-action="edit-group-perms" data-group-id="${g.id}"><i class="bi bi-sliders"></i> Permissions</button>
+                <button type="button" class="btn btn-sm btn-outline-danger" data-action="delete-group" data-group-id="${g.id}"><i class="bi bi-trash"></i> Delete</button>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td colspan="7">${groupPermEditorHtml(g.id)}</td>
+          </tr>
+        `;
+      })
+      .join("");
+
+    el.groupsTable.innerHTML = `
+      <div class="table-responsive">
+        <table class="table table-sm align-middle">
+          <thead>
+            <tr>
+              <th>Display</th>
+              <th>Name</th>
+              <th>Description</th>
+              <th style="width:160px;">Role</th>
+              <th style="width:90px;">Members</th>
+              <th style="width:80px;">Perms</th>
+              <th style="width:280px;">Actions</th>
+            </tr>
+          </thead>
+          <tbody>${rows || '<tr><td colspan="7" class="text-muted">No groups found.</td></tr>'}</tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  async function refreshAll() {
+    await Promise.all([loadUsers(), loadGroups(), loadPermissions()]);
+    renderUsers();
+    renderGroups();
+  }
+
+  async function submitCreateUser(form) {
+    const fd = new FormData(form);
+    const payload = {
+      username: String(fd.get("username") || "").trim(),
+      email: String(fd.get("email") || "").trim() || null,
+      password: String(fd.get("password") || ""),
+      role: String(fd.get("role") || "viewer"),
+    };
+
+    await MIDENA.api("/v1/admin/users", { method: "POST", body: payload });
+    form.reset();
+    setMessage("User created.", "success");
+    await refreshAll();
+  }
+
+  async function submitCreateGroup(form) {
+    const fd = new FormData(form);
+    const payload = {
+      name: String(fd.get("name") || "").trim(),
+      role: String(fd.get("role") || "").trim() || null,
+    };
+
+    await MIDENA.api("/v1/admin/groups", { method: "POST", body: payload });
+    form.reset();
+    setMessage("Group created.", "success");
+    await refreshAll();
+  }
+
+  async function onUsersTableClick(event) {
+    const button = event.target.closest("button");
+    if (!button) return;
+
+    const action = button.dataset.action;
+    const userId = Number(button.dataset.userId || 0);
+
+    if (action === "save-user" && userId) {
+      const emailEl = el.usersTable.querySelector(
+        `input[data-field="email"][data-user-id="${userId}"]`,
+      );
+      const roleEl = el.usersTable.querySelector(
+        `select[data-field="role"][data-user-id="${userId}"]`,
+      );
+      const activeEl = el.usersTable.querySelector(
+        `input[data-field="active"][data-user-id="${userId}"]`,
+      );
+      // An empty address clears the account's email, as in KEEN.
+      const payload = {
+        role: roleEl?.value || "viewer",
+        is_active: Boolean(activeEl?.checked),
+        email: String(emailEl?.value || "").trim(),
+      };
+      await MIDENA.api(`/v1/admin/users/${userId}`, {
+        method: "PATCH",
+        body: payload,
+      });
+      setMessage(`User #${userId} updated.`, "success");
+      await refreshAll();
+      return;
+    }
+
+    if (action === "reset-password" && userId) {
+      const target = state.users.find((x) => Number(x.id) === Number(userId));
+      const label = target?.username || `#${userId}`;
+      const password = window.prompt(`Set a new password for ${label}:`);
+      if (!password) return;
+      await MIDENA.api(`/v1/admin/users/${userId}/password`, {
+        method: "POST",
+        body: { new_password: password },
+      });
+      setMessage(`Password updated for ${label}.`, "success");
+      return;
+    }
+
+    if (action === "delete-user" && userId) {
+      const target = state.users.find((x) => Number(x.id) === Number(userId));
+      const label = target?.username ? `“${target.username}”` : `#${userId}`;
+      if (
+        !window.confirm(
+          `Delete user ${label}? This is permanent and will remove their sessions, preferences, shortcuts, and question posts.`,
+        )
+      )
+        return;
+      await MIDENA.api(`/v1/admin/users/${userId}`, { method: "DELETE" });
+      setMessage(`User ${label} deleted.`, "success");
+      await refreshAll();
+      return;
+    }
+
+    if (action === "edit-user-access" && userId) {
+      state.editingUserAccess = await MIDENA.api(
+        `/v1/admin/users/${userId}/access`,
+      );
+      renderUsers();
+      return;
+    }
+
+    if (action === "cancel-user-access") {
+      state.editingUserAccess = null;
+      renderUsers();
+      return;
+    }
+
+    if (action === "save-user-access" && userId) {
+      const panel = button.closest(".card");
+      const groupIds = Array.from(
+        panel.querySelectorAll('input[data-kind="group"]:checked'),
+      ).map((cb) => Number(cb.value));
+      const permissionIds = Array.from(
+        panel.querySelectorAll('input[data-kind="perm"]:checked'),
+      ).map((cb) => Number(cb.value));
+      await MIDENA.api(`/v1/admin/users/${userId}/access`, {
+        method: "PUT",
+        body: {
+          group_ids: groupIds,
+          permission_ids: permissionIds,
+        },
+      });
+      state.editingUserAccess = null;
+      setMessage(`Access updated for user #${userId}.`, "success");
+      await refreshAll();
+    }
+  }
+
+  async function onGroupsTableClick(event) {
+    const button = event.target.closest("button");
+    if (!button) return;
+
+    const action = button.dataset.action;
+    const groupId = Number(button.dataset.groupId || 0);
+
+    if (action === "save-group" && groupId) {
+      const roleEl = el.groupsTable.querySelector(
+        `select[data-field="group-role"][data-group-id="${groupId}"]`,
+      );
+      const nameEl = el.groupsTable.querySelector(
+        `input[data-field="group-name"][data-group-id="${groupId}"]`,
+      );
+      const descEl = el.groupsTable.querySelector(
+        `input[data-field="group-description"][data-group-id="${groupId}"]`,
+      );
+      await MIDENA.api(`/v1/admin/groups/${groupId}`, {
+        method: "PATCH",
+        body: {
+          name: String(nameEl?.value || "").trim(),
+          description: String(descEl?.value || "").trim() || null,
+          role: String(roleEl?.value || "").trim() || null,
+        },
+      });
+      setMessage(`Group #${groupId} updated.`, "success");
+      await refreshAll();
+      return;
+    }
+
+    if (action === "delete-group" && groupId) {
+      const target = state.groups.find((x) => Number(x.id) === Number(groupId));
+      const label = target?.name ? `“${target.name}”` : `#${groupId}`;
+      if (
+        !window.confirm(
+          `Delete group ${label}? This is permanent and will remove its memberships and permissions.`,
+        )
+      )
+        return;
+      await MIDENA.api(`/v1/admin/groups/${groupId}`, { method: "DELETE" });
+      setMessage(`Group ${label} deleted.`, "success");
+      await refreshAll();
+      return;
+    }
+
+    if (action === "edit-group-perms" && groupId) {
+      state.editingGroupPerms = await MIDENA.api(
+        `/v1/admin/groups/${groupId}/permissions`,
+      );
+      renderGroups();
+      return;
+    }
+
+    if (action === "cancel-group-perms") {
+      state.editingGroupPerms = null;
+      renderGroups();
+      return;
+    }
+
+    if (action === "save-group-perms" && groupId) {
+      const panel = button.closest(".card");
+      const permissionIds = Array.from(
+        panel.querySelectorAll('input[data-kind="perm"]:checked'),
+      ).map((cb) => Number(cb.value));
+      await MIDENA.api(`/v1/admin/groups/${groupId}/permissions`, {
+        method: "PUT",
+        body: { permission_ids: permissionIds },
+      });
+      state.editingGroupPerms = null;
+      setMessage(`Permissions updated for group #${groupId}.`, "success");
+      await refreshAll();
+    }
+  }
+
+  async function init() {
+    await MIDENA.ensureInitialized();
+    initAdminTabs();
+
+    if (!MIDENA.isAdmin()) {
+      window.location.href = "/index.html?forbidden=1";
+      return;
+    }
+
+    el.createUserForm?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      setMessage("");
+      try {
+        await submitCreateUser(event.currentTarget);
+      } catch (err) {
+        setMessage(err.message || "Failed to create user.", "error");
+      }
     });
-    renderThemeForm(state.chrome.theme_settings || DEFAULT_THEME);
+
+    el.createGroupForm?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      setMessage("");
+      try {
+        await submitCreateGroup(event.currentTarget);
+      } catch (err) {
+        setMessage(err.message || "Failed to create group.", "error");
+      }
+    });
+
+    el.usersTable?.addEventListener("click", async (event) => {
+      setMessage("");
+      try {
+        await onUsersTableClick(event);
+      } catch (err) {
+        setMessage(err.message || "Failed to update user.", "error");
+      }
+    });
+
+    el.groupsTable?.addEventListener("click", async (event) => {
+      setMessage("");
+      try {
+        await onGroupsTableClick(event);
+      } catch (err) {
+        setMessage(err.message || "Failed to update group.", "error");
+      }
+    });
+
+    el.auditFilters?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        await loadAuditTrail(0);
+      } catch (err) {
+        if (el.auditMsg)
+          el.auditMsg.textContent =
+            err.message || "Failed to load audit trail.";
+      }
+    });
+
+    el.refreshAuditBtn?.addEventListener("click", async () => {
+      try {
+        await loadAuditTrail();
+      } catch (err) {
+        if (el.auditMsg)
+          el.auditMsg.textContent =
+            err.message || "Failed to load audit trail.";
+      }
+    });
+
+    el.auditPrevBtn?.addEventListener("click", async () => {
+      try {
+        await pageAuditTrail(-1);
+      } catch (err) {
+        if (el.auditMsg)
+          el.auditMsg.textContent =
+            err.message || "Failed to load previous audit page.";
+      }
+    });
+
+    el.auditNextBtn?.addEventListener("click", async () => {
+      try {
+        await pageAuditTrail(1);
+      } catch (err) {
+        if (el.auditMsg)
+          el.auditMsg.textContent =
+            err.message || "Failed to load next audit page.";
+      }
+    });
+
+    el.entityChangelogFilters?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        await loadAdminEntityChangelog(0);
+      } catch (err) {
+        if (el.entityChangelogMsg)
+          el.entityChangelogMsg.textContent =
+            err.message || "Failed to load entity changelog.";
+      }
+    });
+
+    el.refreshEntityChangelogBtn?.addEventListener("click", async () => {
+      try {
+        await loadAdminEntityChangelog();
+      } catch (err) {
+        if (el.entityChangelogMsg)
+          el.entityChangelogMsg.textContent =
+            err.message || "Failed to load entity changelog.";
+      }
+    });
+
+    el.entityChangelogPrevBtn?.addEventListener("click", async () => {
+      try {
+        await pageEntityChangelog(-1);
+      } catch (err) {
+        if (el.entityChangelogMsg)
+          el.entityChangelogMsg.textContent =
+            err.message || "Failed to load previous changelog page.";
+      }
+    });
+
+    el.refreshMailBtn?.addEventListener("click", loadOutbox);
+
+    el.entityChangelogNextBtn?.addEventListener("click", async () => {
+      try {
+        await pageEntityChangelog(1);
+      } catch (err) {
+        if (el.entityChangelogMsg)
+          el.entityChangelogMsg.textContent =
+            err.message || "Failed to load next changelog page.";
+      }
+    });
+
+    try {
+      await refreshAll();
+    } catch (err) {
+      setMessage(err.message || "Failed to load admin data.", "error");
+    }
+
+    try {
+      await Promise.all([
+        loadAuditTrail(),
+        loadAdminEntityChangelog(),
+        loadOutbox(),
+      ]);
+    } catch (err) {
+      if (el.auditMsg)
+        el.auditMsg.textContent = err.message || "Failed to load admin data.";
+    }
   }
 
-  document.getElementById('saveChromeBtn').addEventListener('click', async () => { try { await saveChrome(); toast('Global header/footer saved.', 'success'); } catch (err) { toast(err.message, 'error'); } });
-  document.getElementById('saveThemeBtn').addEventListener('click', async () => { try { await saveChrome({ theme_settings: readThemeForm() }); toast('Global diagram theme saved.', 'success'); } catch (err) { toast(err.message, 'error'); } });
-  document.getElementById('resetThemeBtn').addEventListener('click', () => renderThemeForm(DEFAULT_THEME));
-
-  async function loadAudit() { const data = await api(`/v1/admin/audit?limit=${state.limit}&offset=${state.auditOffset}`); document.getElementById('auditRows').innerHTML = (data.items || []).map((r) => `<tr><td>${formatDate(r.ts)}</td><td>${escapeHtml(r.username || '')}</td><td>${escapeHtml(r.method)}</td><td class="path-cell">${escapeHtml(r.path)}${r.query_string ? '?' + escapeHtml(r.query_string) : ''}</td><td>${r.status_code}</td></tr>`).join(''); document.getElementById('auditInfo').textContent = `${data.offset + 1}-${Math.min(data.offset + data.limit, data.total)} of ${data.total}`; }
-  async function loadChanges() { const data = await api(`/v1/admin/entity-changelog?limit=${state.limit}&offset=${state.changeOffset}`); document.getElementById('changeRows').innerHTML = (data.items || []).map((r) => `<tr><td>${formatDate(r.changed_at)}</td><td>${escapeHtml(r.entity_type)} #${r.entity_id}<div class="small text-secondary">${escapeHtml(r.entity_title || '')}</div></td><td>${escapeHtml(r.action)}</td><td>${escapeHtml(r.summary)}</td><td>${escapeHtml(r.changed_by_username || '')}</td></tr>`).join(''); document.getElementById('changeInfo').textContent = `${data.offset + 1}-${Math.min(data.offset + data.limit, data.total)} of ${data.total}`; }
-  document.getElementById('auditPrev').onclick = () => { state.auditOffset = Math.max(0, state.auditOffset - state.limit); loadAudit(); }; document.getElementById('auditNext').onclick = () => { state.auditOffset += state.limit; loadAudit(); };
-  document.getElementById('changePrev').onclick = () => { state.changeOffset = Math.max(0, state.changeOffset - state.limit); loadChanges(); }; document.getElementById('changeNext').onclick = () => { state.changeOffset += state.limit; loadChanges(); };
-  try { await Promise.all([loadUsers(), loadLocks(), loadChrome(), loadAudit(), loadChanges()]); } catch (err) { toast(err.message, 'error'); }
+  document.addEventListener("DOMContentLoaded", init);
 })();

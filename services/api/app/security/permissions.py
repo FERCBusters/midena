@@ -8,27 +8,20 @@ from app.security.roles import (
     ROLE_ADMIN,
     ROLE_ARCHITECT,
     ROLE_CONTRIBUTOR,
-    ROLE_ENGINEER,
     ROLE_DIAGRAM_ADMIN,
+    ROLE_ENGINEER,
     ROLE_MAINTAINER,
     ROLE_PRODUCT_OWNER,
     attach_effective_role,
 )
 
+# Permission codes used by the API
 PERM_DIAGRAM_READ_PRIVATE = "diagram.read_private"
 PERM_DIAGRAM_WRITE = "diagram.write"
 PERM_DIAGRAM_COMMENT = "diagram.comment"
 PERM_DIAGRAM_EXPORT = "diagram.export"
 PERM_FOLDER_MANAGE = "folder.manage"
 PERM_AUDITTRAIL_READ = "audittrail.read"
-
-# Backwards-compatible aliases for copied UI/admin code paths.
-PERM_PROJECT_WRITE = PERM_DIAGRAM_WRITE
-PERM_FRAMEWORK_WRITE = PERM_FOLDER_MANAGE
-PERM_MANIFEST_EXPORT = PERM_DIAGRAM_EXPORT
-PERM_PROJECT_QUESTION = PERM_DIAGRAM_COMMENT
-PERM_PROJECT_ANSWER = PERM_DIAGRAM_COMMENT
-PERM_PROJECT_DIFF = PERM_DIAGRAM_READ_PRIVATE
 
 ROLE_DEFAULT_PERMISSIONS = {
     ROLE_ADMIN: {"*"},
@@ -69,20 +62,21 @@ ROLE_DEFAULT_PERMISSIONS = {
     },
 }
 
+
 DEFAULT_PERMISSION_SEED = [
     {
         "code": PERM_DIAGRAM_READ_PRIVATE,
-        "description": "View private diagrams when authenticated",
+        "description": "Read every diagram marked private, not only one's own and those shared with one",
     },
     {
         "code": PERM_DIAGRAM_WRITE,
-        "description": "Create, edit, save and delete diagrams",
+        "description": "Create diagrams, and edit one's own and those shared for editing",
     },
-    {"code": PERM_DIAGRAM_COMMENT, "description": "Comment on diagrams"},
-    {"code": PERM_DIAGRAM_EXPORT, "description": "Export diagrams"},
+    {"code": PERM_DIAGRAM_COMMENT, "description": "Comment on readable diagrams"},
+    {"code": PERM_DIAGRAM_EXPORT, "description": "Export readable diagrams"},
     {
         "code": PERM_FOLDER_MANAGE,
-        "description": "Create, edit, move and delete folders",
+        "description": "Create, rename, move and delete folders",
     },
     {
         "code": PERM_AUDITTRAIL_READ,
@@ -92,6 +86,7 @@ DEFAULT_PERMISSION_SEED = [
 
 
 def seed_default_permissions(db: Session) -> None:
+    """Idempotently seed baseline permission rows used by this application."""
     existing_codes = {
         code
         for (code,) in db.query(Permission.code)
@@ -140,14 +135,20 @@ def _has_group_permission(db: Session, user_id: int, code: str) -> bool:
 
 
 def has_permission(db: Session, user: User, code: str) -> bool:
+    """Return True if the user has the given permission code."""
+
     effective_role = attach_effective_role(db, user)
     if effective_role == ROLE_ADMIN:
         return True
+
     role_codes = ROLE_DEFAULT_PERMISSIONS.get(effective_role, set())
     if "*" in role_codes or code in role_codes:
         return True
+
     if _has_direct_permission(db, user.id, code):
         return True
+
     if _has_group_permission(db, user.id, code):
         return True
+
     return False

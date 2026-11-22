@@ -1,10 +1,13 @@
+# Third-party images are pinned by digest. tools/docker_image_pins.py and the
+# Docker image pins workflow keep the digests current.
 services:
   postgres:
-    image: postgres:16
-    env_file: .env
+    image: postgres:16@sha256:3950ad7c3148ca2175ef1b6c36c9efbf78957ae8fbe8b3a5d7c35af50500382f
+    # Only the database's own settings reach this container, not the whole
+    # application .env with its provider and mail secrets.
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-midena}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: ${POSTGRES_DB:-midena}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER:-postgres}\" -d \"$${POSTGRES_DB:-postgres}\""]
@@ -18,36 +21,75 @@ services:
     networks: [midenanet]
     restart: unless-stopped
 
+  redis:
+    image: docker.io/valkey/valkey:8@sha256:5032c4dd7abe08d6fd9382054608183e2bf1f7e3895ef619b8784698454325f7
+    # The password reaches Valkey in a configuration file written as the
+    # container starts. Process arguments are visible to every account on the
+    # Docker host, so it is never passed as --requirepass. The image's own
+    # entrypoint then starts Valkey as its unprivileged user.
+    entrypoint:
+      - sh
+      - -c
+      - |
+        umask 077
+        escaped=$$(printf '%s' "$$REDIS_PASSWORD" | sed 's/[\\"]/\\&/g')
+        printf 'save 60 1\nloglevel warning\nrequirepass "%s"\n' "$$escaped" > /tmp/valkey.conf
+        chown valkey /tmp/valkey.conf 2>/dev/null || true
+        exec docker-entrypoint.sh valkey-server /tmp/valkey.conf
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+    networks: [midenanet]
+    restart: unless-stopped
+
+  # The API is reached only through midena-ui, whose nginx clears
+  # client-supplied identity headers; it publishes no port of its own.
   midena-api:
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp
     build:
       context: ./services/api
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8080/v1/system/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
     env_file: .env
+    environment:
+      # Client addresses for sign-in and other per-address limits come through
+      # two forwarding hops: the midena-ui nginx container, and the network
+      # gateway, where connections to the host's published port arrive (such
+      # as from a TLS proxy on the host). Set the variable to override.
+      MIDENA_TRUSTED_PROXY_CIDRS: ${MIDENA_TRUSTED_PROXY_CIDRS:-${MIDENA_UI_ADDRESS:-172.30.67.10}/32,${MIDENA_NETWORK_GATEWAY:-172.30.67.1}/32}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_started
-    ports:
-      - "127.0.0.1:8183:8080"
     networks: [midenanet]
     restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
+
+  # Sends queued mail and sweeps expired rows, with bounded memory,
+  # processor and process budgets.
+  midena-worker:
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     read_only: true
     tmpfs:
       - /tmp
-
-  redis:
-    image: valkey/valkey:7.2
-    command: ["valkey-server", "--save", "60", "1", "--loglevel", "warning", "--requirepass", "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}"]
-    networks: [midenanet]
-    restart: unless-stopped
-
-  midena-worker:
+    mem_limit: ${MIDENA_WORKER_MEM_LIMIT:-512m}
+    cpus: ${MIDENA_WORKER_CPUS:-1.0}
+    pids_limit: 64
     build:
       context: ./services/api
     env_file: .env
     depends_on:
+      # The API applies database migrations before it reports healthy.
+      midena-api:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       redis:
@@ -55,14 +97,17 @@ services:
     command: ["./scripts/start-celery-worker.sh"]
     networks: [midenanet]
     restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
 
   midena-beat:
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
     build:
       context: ./services/api
     env_file: .env
     depends_on:
+      midena-api:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       redis:
@@ -72,29 +117,34 @@ services:
       - beatdata:/var/lib/midena
     networks: [midenanet]
     restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
 
   midena-ui:
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp
     build:
-      context: ..
-      dockerfile: midena/services/ui/Dockerfile
-    env_file: .env
+      context: .
+      dockerfile: services/ui/Dockerfile
     depends_on:
       - midena-api
     ports:
       - "127.0.0.1:8083:80"
-    networks: [midenanet]
+    networks:
+      midenanet:
+        ipv4_address: ${MIDENA_UI_ADDRESS:-172.30.67.10}
     restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
-    tmpfs:
-      - /tmp
 
 volumes:
   pgdata:
   beatdata:
 
+# A fixed subnet gives the midena-ui proxy and the gateway known addresses
+# for MIDENA_TRUSTED_PROXY_CIDRS. Where it clashes with another network on the
+# host, set MIDENA_NETWORK_SUBNET, MIDENA_NETWORK_GATEWAY and MIDENA_UI_ADDRESS.
 networks:
   midenanet:
     driver: bridge
+    ipam:
+      config:
+        - subnet: ${MIDENA_NETWORK_SUBNET:-172.30.67.0/24}
+          gateway: ${MIDENA_NETWORK_GATEWAY:-172.30.67.1}

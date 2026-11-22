@@ -1,35 +1,29 @@
 from __future__ import annotations
 
-import re
+import json
+import logging
 from typing import Any
-from urllib.parse import urlparse
 
-import httpx
+import httpx2 as httpx
 
 from app.core.config import settings
+
+log = logging.getLogger(__name__)
 
 
 class DiagramAIError(RuntimeError):
     """Raised when the configured OpenAI-compatible provider cannot generate code."""
 
 
-def _configured_base_url() -> str:
-    base = str(getattr(settings, "ai_api_base_url", "") or "").strip().rstrip("/")
-    if not base:
-        return ""
-    parsed = urlparse(base)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise DiagramAIError("MIDENA_AI_API_BASE_URL must be an absolute http(s) URL")
-    return base
+# The provider's answer is one chat completion; a diagram is a few kilobytes.
+_MAX_ANSWER_BYTES = 1024 * 1024
 
 
 def ai_is_configured() -> bool:
-    if not bool(getattr(settings, "ai_enabled", True)):
-        return False
     return bool(
-        str(getattr(settings, "ai_api_key", "") or "").strip()
-        and str(getattr(settings, "ai_model", "") or "").strip()
-        and str(getattr(settings, "ai_api_base_url", "") or "").strip()
+        settings.ai_api_key.strip()
+        and settings.ai_model.strip()
+        and settings.ai_api_base_url.strip()
     )
 
 
@@ -37,11 +31,8 @@ def ai_status() -> dict[str, Any]:
     configured = ai_is_configured()
     return {
         "enabled": configured,
-        "model": str(getattr(settings, "ai_model", "") or "") if configured else None,
+        "model": settings.ai_model if configured else None,
         "provider": "OpenAI-compatible",
-        "base_url_configured": bool(
-            str(getattr(settings, "ai_api_base_url", "") or "").strip()
-        ),
     }
 
 
@@ -69,21 +60,38 @@ Do not include HTML, JavaScript, XML, SVG, external links, or unsafe markup.
 """.strip()
 
 
+# A diagram's source is a few thousand characters; an answer is cut to this
+# before it is read, so the scanning below has a fixed budget.
+_MAX_CONTENT_CHARS = 200_000
+_DIRECTIVES = ("sequencediagram", "flowchart", "graph")
+
+
 def _strip_markdown_fence(text: str) -> str:
-    value = str(text or "").strip()
+    """The diagram source in a model's answer.
+
+    Linear in the answer's length: the provider's text is shaped by prompts
+    users write, so it is scanned with plain searches, never a backtracking
+    pattern.
+    """
+    value = text[:_MAX_CONTENT_CHARS].strip()
     if not value:
         return ""
-    fenced = re.search(r"```(?:[a-zA-Z0-9_-]+)?\s*(.*?)```", value, flags=re.S)
-    if fenced:
-        return fenced.group(1).strip()
-    # Some models still prefix a single sentence. Keep the first plausible
+    start = value.find("```")
+    if start >= 0:
+        # Skip the info string (a language name) on the opening fence's line.
+        body_start = value.find("\n", start + 3)
+        if body_start >= 0:
+            end = value.find("```", body_start)
+            if end >= 0:
+                return value[body_start + 1 : end].strip()
+    # Some models still prefix a sentence. Keep the first line that starts a
     # Mermaid directive and everything after it rather than returning prose.
-    directive = re.search(
-        r"(?im)^\s*(sequenceDiagram|flowchart\s+\w+|graph\s+\w+)\b", value
-    )
-    if directive and directive.start() > 0:
-        value = value[directive.start() :]
-    return value.strip()
+    offset = 0
+    for line in value.splitlines(keepends=True):
+        if line.strip().lower().startswith(_DIRECTIVES):
+            return value[offset:].strip()
+        offset += len(line)
+    return value
 
 
 def _normalised_messages(
@@ -119,40 +127,46 @@ async def generate_diagram_code(
     messages: list[dict[str, str]],
     current_source: str | None = None,
 ) -> str:
+    """Ask the configured provider for diagram source.
+
+    The base URL is HTTPS (config refuses anything else outside localhost),
+    redirects are not followed, the answer is read up to a fixed size, and no
+    part of a refusal from the provider reaches the browser: provider errors
+    can quote the request, the key's account or internal detail.
+    """
     if not ai_is_configured():
-        raise DiagramAIError(
-            "AI diagram generation is not configured. Set MIDENA_AI_API_KEY and MIDENA_AI_MODEL."
-        )
-    base = _configured_base_url()
-    api_key = str(getattr(settings, "ai_api_key", "") or "").strip()
-    model = str(getattr(settings, "ai_model", "") or "").strip()
-    timeout_seconds = max(
-        5, min(int(getattr(settings, "ai_timeout_seconds", 45) or 45), 120)
-    )
-    max_tokens = max(
-        256, min(int(getattr(settings, "ai_max_tokens", 2500) or 2500), 12000)
-    )
-    temperature = float(getattr(settings, "ai_temperature", 0.2) or 0.2)
+        raise DiagramAIError("AI diagram generation is not configured.")
     request_body: dict[str, Any] = {
-        "model": model,
+        "model": settings.ai_model.strip(),
         "messages": _normalised_messages(
             diagram_type=diagram_type, messages=messages, current_source=current_source
         ),
-        "temperature": max(0.0, min(temperature, 1.0)),
-        "max_tokens": max_tokens,
+        "temperature": settings.ai_temperature,
+        "max_tokens": settings.ai_max_tokens,
     }
-    url = f"{base}/chat/completions"
+    url = f"{settings.ai_api_base_url.rstrip('/')}/chat/completions"
+    body = b""
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds)) as client:
-            response = await client.post(
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(settings.ai_timeout_seconds),
+            follow_redirects=False,
+        ) as client:
+            async with client.stream(
+                "POST",
                 url,
                 headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {settings.ai_api_key.strip()}",
                     "Accept": "application/json",
                 },
                 json=request_body,
-            )
+            ) as response:
+                status = response.status_code
+                async for chunk in response.aiter_bytes():
+                    body += chunk
+                    if len(body) > _MAX_ANSWER_BYTES:
+                        raise DiagramAIError(
+                            "The AI provider returned an unexpectedly large answer."
+                        )
     except httpx.TimeoutException as exc:
         raise DiagramAIError(
             "The AI provider timed out while generating the diagram."
@@ -160,29 +174,19 @@ async def generate_diagram_code(
     except httpx.HTTPError as exc:
         raise DiagramAIError("The AI provider could not be reached.") from exc
 
-    if response.status_code >= 400:
-        detail = ""
-        try:
-            data = response.json()
-            err = data.get("error") if isinstance(data, dict) else None
-            detail = str(
-                err.get("message") if isinstance(err, dict) else data.get("detail", "")
-            )
-        except Exception:
-            detail = response.text[:300]
-        suffix = f": {detail}" if detail else ""
-        raise DiagramAIError(
-            f"The AI provider returned HTTP {response.status_code}{suffix}"
-        )
-
+    if status != 200:
+        log.warning("AI provider answered HTTP %s", status)
+        raise DiagramAIError(f"The AI provider refused the request (HTTP {status}).")
     try:
-        data = response.json()
+        data = json.loads(body)
         content = data["choices"][0]["message"]["content"]
     except Exception as exc:
         raise DiagramAIError(
             "The AI provider returned an unexpected response shape."
         ) from exc
-    code = _strip_markdown_fence(str(content or ""))
+    if not isinstance(content, str):
+        raise DiagramAIError("The AI provider returned an unexpected response shape.")
+    code = _strip_markdown_fence(content)
     if not code:
         raise DiagramAIError("The AI provider returned an empty diagram.")
     return code

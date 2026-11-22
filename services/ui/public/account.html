@@ -1,131 +1,264 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>MIDENA · Account</title>
-  <link rel="icon" href="/favicon.svg">
-  <link rel="stylesheet" href="/vendor/bootstrap/bootstrap.min.css">
-  <link rel="stylesheet" href="/vendor/bootstrap-icons/bootstrap-icons.min.css">
-  <link rel="stylesheet" href="/vendor/mosp-design-system/styles.css">
-  <link rel="stylesheet" href="/styles.css">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MIDENA - Account</title>
+
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/vendor/bootstrap/bootstrap.min.css" />
+  <link rel="stylesheet" href="/vendor/bootstrap-icons/bootstrap-icons.min.css" />
+  <link rel="stylesheet" href="/styles.css" />
+
+  <script src="/mosp-ui-config.js"></script>
+  <script src="/vendor/mosp-design-system/theme-boot.js"></script>
 </head>
-<body>
+<body data-page="account">
   <div id="navbar"></div>
-  <main class="container py-3">
-    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+
+  <main class="container container-tight py-4">
+    <div class="d-flex flex-wrap gap-2 align-items-center justify-content-between mb-3">
       <div>
         <h1 class="h3 mb-1">Account</h1>
-        <p class="text-secondary mb-0">Profile, preferences, theme and shortcuts.</p>
+        <div class="small-muted">Manage your session and UI preferences.</div>
+      </div>
+      <div class="d-flex gap-2">
+        <a class="btn btn-outline-secondary" href="/index.html"><i class="bi bi-arrow-left"></i> Back</a>
       </div>
     </div>
 
-    <ul class="nav nav-tabs mb-3" id="accountTabs" role="tablist">
-      <li class="nav-item" role="presentation"><button class="nav-link active" id="profile-tab" data-bs-toggle="tab" data-bs-target="#profilePane" type="button" role="tab" aria-controls="profilePane" aria-selected="true"><i class="bi bi-person me-1"></i>Profile</button></li>
-      <li class="nav-item" role="presentation"><button class="nav-link" id="preferences-tab" data-bs-toggle="tab" data-bs-target="#preferencesPane" type="button" role="tab" aria-controls="preferencesPane" aria-selected="false"><i class="bi bi-sliders me-1"></i>Preferences</button></li>
-      <li class="nav-item" role="presentation"><button class="nav-link" id="shortcuts-tab" data-bs-toggle="tab" data-bs-target="#shortcutsPane" type="button" role="tab" aria-controls="shortcutsPane" aria-selected="false"><i class="bi bi-bookmark-star me-1"></i>Shortcuts</button></li>
-    </ul>
+    <div class="admin-tab-layout d-flex flex-column flex-lg-row gap-3">
+      <ul class="nav nav-pills flex-column admin-tab-nav" id="accountTabs" role="tablist" aria-orientation="vertical">
+      <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="tabBtnProfile" data-bs-toggle="tab" data-bs-target="#tabProfile" type="button" role="tab" aria-controls="tabProfile" aria-selected="true" data-hash="profile">
+          Profile
+        </button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="tabBtnPreferences" data-bs-toggle="tab" data-bs-target="#tabPreferences" type="button" role="tab" aria-controls="tabPreferences" aria-selected="false" data-hash="preferences">
+          Preferences
+        </button>
+      </li>
+                  <li class="nav-item" role="presentation">
+        <button class="nav-link" id="tabBtnShortcuts" data-bs-toggle="tab" data-bs-target="#tabShortcuts" type="button" role="tab" aria-controls="tabShortcuts" aria-selected="false" data-hash="shortcuts">
+          Shortcuts
+        </button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="tabBtnPassword" data-bs-toggle="tab" data-bs-target="#tabPassword" type="button" role="tab" aria-controls="tabPassword" aria-selected="false" data-hash="password">
+          Password &amp; security
+        </button>
+      </li>
+      </ul>
 
-    <div class="tab-content">
-      <section class="tab-pane fade show active" id="profilePane" role="tabpanel" aria-labelledby="profile-tab" tabindex="0">
-        <div class="card">
+      <div class="tab-content flex-grow-1" id="accountTabsContent">
+      <div class="tab-pane fade show active" id="tabProfile" role="tabpanel" aria-labelledby="tabBtnProfile" tabindex="0">
+        <div class="card mb-3">
           <div class="card-header">
             <div class="fw-bold">Profile</div>
-            <div class="small text-secondary">Your MIDENA account details and primary email address.</div>
+            <div class="small-muted">Your current session identity.</div>
           </div>
           <div class="card-body">
-            <dl class="row mb-3">
-              <dt class="col-sm-3">Username</dt><dd class="col-sm-9" id="username">—</dd>
-              <dt class="col-sm-3">Role</dt><dd class="col-sm-9" id="role">—</dd>
-              <dt class="col-sm-3">Email</dt><dd class="col-sm-9" id="email">—</dd>
-              <dt class="col-sm-3">Sign-in method</dt><dd class="col-sm-9" id="authMethod">—</dd>
-            </dl>
-            <form id="emailForm" class="row g-2 align-items-end">
-              <div class="col-12 col-lg-8">
-                <label class="form-label small text-secondary mb-1" for="emailInput">Primary email</label>
-                <input id="emailInput" class="form-control" type="email" placeholder="Primary email">
-              </div>
-              <div class="col-12 col-lg-4 d-grid"><button class="btn btn-primary">Save email</button></div>
-            </form>
-          </div>
-        </div>
-      </section>
-
-      <section class="tab-pane fade" id="preferencesPane" role="tabpanel" aria-labelledby="preferences-tab" tabindex="0">
-        <div class="card">
-          <div class="card-header">
-            <div class="fw-bold">Preferences</div>
-            <div class="small text-secondary">Pick a theme and browser/UI preferences using the same MOSP Design System pattern as KEEN and OSPMAE.</div>
-          </div>
-          <div class="card-body">
-            <div class="row g-3">
+            <div class="small-muted mb-2">Signed in as <span id="profileUser" class="fw-semibold"></span></div>
+            <div class="row g-2">
               <div class="col-12 col-lg-6">
-                <label class="form-label small text-secondary mb-1" for="prefTheme">Theme</label>
-                <select id="prefTheme" class="form-select"></select>
-                <div class="form-text">Stored in your browser and applied across MIDENA pages.</div>
+                <div class="small-muted">Username</div>
+                <div id="profileUsername" class="fw-semibold font-monospace">–</div>
               </div>
               <div class="col-12 col-lg-6">
-                <label class="form-label small text-secondary mb-1" for="defaultStartPage">Default start page</label>
-                <select id="defaultStartPage" class="form-select"></select>
+                <div class="small-muted">Role</div>
+                <div id="profileRole" class="fw-semibold font-monospace">–</div>
               </div>
-              <div class="col-12 col-lg-6">
-                <label class="form-label small mb-1">Sticky filters &amp; visuals</label>
-                <div class="form-check form-switch">
-                  <input id="prefSticky" class="form-check-input" type="checkbox">
-                  <label class="form-check-label" for="prefSticky">Keep key panels pinned while scrolling</label>
-                </div>
-              </div>
-              <div class="col-12 col-lg-6">
-                <label class="form-label small mb-1">Auto-apply</label>
-                <div class="form-check form-switch">
-                  <input id="prefAutoApply" class="form-check-input" type="checkbox">
-                  <label class="form-check-label" for="prefAutoApply">Automatically refresh results after filter changes</label>
-                </div>
-              </div>
-              <div class="col-12 col-lg-6">
-                <label class="form-label small mb-1">Diagram source panels</label>
-                <div class="form-check form-switch">
-                  <input id="prefDiagramSourceCollapsed" class="form-check-input" type="checkbox">
-                  <label class="form-check-label" for="prefDiagramSourceCollapsed">Open WSD/Flowchart source panels collapsed by default</label>
-                </div>
-              </div>
-              <div class="col-12 col-lg-6">
-                <label class="form-label small mb-1">Diagram sidebar</label>
-                <div class="form-check form-switch">
-                  <input id="prefDiagramSidebarCollapsed" class="form-check-input" type="checkbox">
-                  <label class="form-check-label" for="prefDiagramSidebarCollapsed">Open the diagram sidebar collapsed by default</label>
-                </div>
-              </div>
-              <div class="col-12 d-flex justify-content-end">
-                <button class="btn btn-primary" id="savePreferencesBtn" type="button"><i class="bi bi-check2 me-1"></i>Save preferences</button>
+              <div class="col-12">
+                <div class="small-muted">Email</div>
+                <div id="profileEmail" class="fw-semibold font-monospace">–</div>
+                <div class="form-text">Set by your MIDENA administrator. Account and security emails go to this address.</div>
               </div>
             </div>
           </div>
         </div>
-      </section>
+      </div>
 
-      <section class="tab-pane fade" id="shortcutsPane" role="tabpanel" aria-labelledby="shortcuts-tab" tabindex="0">
-        <div class="card">
+      <div class="tab-pane fade" id="tabPreferences" role="tabpanel" aria-labelledby="tabBtnPreferences" tabindex="0">
+        <div class="card mb-3">
           <div class="card-header">
-            <div class="fw-bold">Shortcuts</div>
-            <div class="small text-secondary">Personal bookmark-style shortcuts shown through the shared MOSP shell.</div>
+            <div class="fw-bold">Preferences</div>
+            <div class="small-muted">Pick a theme, default start page, and manage your palette.</div>
           </div>
           <div class="card-body">
-            <form id="shortcutForm" class="row g-2 mb-3">
-              <div class="col-md-4"><input id="shortcutName" class="form-control" placeholder="Name"></div>
-              <div class="col-md-6"><input id="shortcutUrl" class="form-control" placeholder="/index.html?q=..."></div>
-              <div class="col-md-2 d-grid"><button class="btn btn-outline-primary">Save</button></div>
-            </form>
-            <div id="shortcuts"></div>
+            <div class="row g-3">
+              <div class="col-12 col-lg-6">
+                <label class="form-label small-muted mb-1" for="prefTheme">Theme</label>
+                <select id="prefTheme" class="form-select"></select>
+                <div class="form-text">Stored in your browser.</div>
+              </div>
+              <div class="col-12 col-lg-6">
+                <label class="form-label small-muted mb-1" for="defaultStartPage">Default start page</label>
+                <select id="defaultStartPage" class="form-select"></select>
+              </div>
+
+                <div class="col-12">
+                  <div class="row g-3">
+                    <div class="col-12 col-lg-6">
+                      <label class="form-label small mb-1">Sticky filters &amp; visuals</label>
+                      <div class="form-check form-switch">
+                        <input id="prefSticky" class="form-check-input" type="checkbox" />
+                        <label class="form-check-label" for="prefSticky">Keep filters/visual controls pinned while scrolling</label>
+                      </div>
+                      <div class="text-secondary small mt-1">When enabled, key filter panels stay visible as you scroll long lists/graphs.</div>
+                    </div>
+
+                    <div class="col-12 col-lg-6">
+                      <label class="form-label small mb-1">Auto-apply</label>
+                      <div class="form-check form-switch">
+                        <input id="prefAutoApply" class="form-check-input" type="checkbox" />
+                        <label class="form-check-label" for="prefAutoApply">Automatically refresh results after changing filters</label>
+                      </div>
+                      <div class="text-secondary small mt-1">If disabled, use the “Apply filters” button instead.</div>
+                    </div>
+
+                    <div class="col-12 col-lg-6">
+                      <label class="form-label small mb-1">Diagram source panel</label>
+                      <div class="form-check form-switch">
+                        <input id="prefDiagramSourceCollapsed" class="form-check-input" type="checkbox" />
+                        <label class="form-check-label" for="prefDiagramSourceCollapsed">Start with the source panel collapsed</label>
+                      </div>
+                    </div>
+
+                    <div class="col-12 col-lg-6">
+                      <label class="form-label small mb-1">Diagram sidebar</label>
+                      <div class="form-check form-switch">
+                        <input id="prefDiagramSidebarCollapsed" class="form-check-input" type="checkbox" />
+                        <label class="form-check-label" for="prefDiagramSidebarCollapsed">Start with the comments and links sidebar collapsed</label>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+            </div>
+
+            
           </div>
         </div>
-      </section>
+      </div>
+
+                  <div class="tab-pane fade" id="tabShortcuts" role="tabpanel" aria-labelledby="tabBtnShortcuts" tabindex="0">
+        <div class="card mb-3">
+          <div class="card-header">
+            <div class="fw-bold">Shortcuts</div>
+            <div class="small-muted">Saved shortcuts appear under the <strong>Shortcuts</strong> menu in the navbar.</div>
+          </div>
+          <div class="card-body">
+            <div id="shortcutsList" class="mb-3"></div>
+
+            <div class="row g-2 align-items-end">
+              <div class="col-12 col-lg-4">
+                <label class="form-label small-muted mb-1" for="shortcutName">Name</label>
+                <input id="shortcutName" class="form-control" type="text" placeholder="e.g. My working set" />
+              </div>
+              <div class="col-12 col-lg-6">
+                <label class="form-label small-muted mb-1" for="shortcutUrl">URL</label>
+                <input id="shortcutUrl" class="form-control" type="text" placeholder="/index.html?tags=process" />
+              </div>
+              <div class="col-12 col-lg-2 d-grid">
+                <button id="addShortcutBtn" class="btn btn-outline-primary" type="button"><i class="bi bi-plus"></i> Add</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tab-pane fade" id="tabPassword" role="tabpanel" aria-labelledby="tabBtnPassword" tabindex="0">
+        <div class="card d-none" id="passwordCard">
+          <div class="card-header">
+            <div class="fw-bold">Password</div>
+            <div class="small-muted">Change your password (local accounts only).</div>
+          </div>
+          <div class="card-body">
+            <form id="changePasswordForm" class="row g-2">
+              <div class="col-12 col-lg-4">
+                <label class="form-label small-muted mb-1" for="currentPassword">Current password</label>
+                <input id="currentPassword" class="form-control" type="password" autocomplete="current-password" required />
+              </div>
+              <div class="col-12 col-lg-4">
+                <label class="form-label small-muted mb-1" for="newPassword">New password</label>
+                <input id="newPassword" class="form-control" type="password" autocomplete="new-password" required />
+              </div>
+              <div class="col-12 col-lg-4">
+                <label class="form-label small-muted mb-1" for="confirmPassword">Confirm new password</label>
+                <input id="confirmPassword" class="form-control" type="password" autocomplete="new-password" required />
+              </div>
+              <div class="col-12 d-flex justify-content-end">
+                <button id="changePasswordBtn" class="btn btn-primary" type="submit">
+                  <i class="bi bi-key"></i> Update password
+                </button>
+              </div>
+            </form>
+            <div id="passwordMsg" class="text-secondary small mt-2"></div>
+          </div>
+        </div>
+        <div class="text-secondary small" id="passwordUnavailableMsg"></div>
+
+        <div class="card d-none" id="mfaCard">
+          <div class="card-header">
+            <div class="fw-bold">Two-factor authentication</div>
+            <div class="small-muted">Protect local sign-in with an authenticator app, security key or passkey. Recovery codes let you sign in if you lose your authenticator.</div>
+          </div>
+          <div class="card-body">
+            <p id="securitySummary" role="status">Loading</p>
+            <form id="securityForm" class="row g-2 align-items-end">
+              <div class="col-12 col-lg-6">
+                <label class="form-label small-muted mb-1" for="securityPassword">Confirm your local password to manage authenticators</label>
+                <input id="securityPassword" class="form-control" type="password" autocomplete="current-password" required />
+              </div>
+              <div class="col-12 col-lg-3 d-flex justify-content-lg-end">
+                <button id="manageMfaBtn" class="btn btn-primary" type="submit">
+                  <i class="bi bi-shield-lock"></i> Manage account security
+                </button>
+              </div>
+            </form>
+            <div class="text-secondary small mt-2" id="mfaMsg"></div>
+          </div>
+        </div>
+
+        <div class="card mb-3" id="ssoEmailCard">
+          <div class="card-header">
+            <div class="fw-bold">SSO email addresses</div>
+            <div class="small-muted">SSO providers must report a verified email that exactly matches an address verified here. Verify your primary address or additional addresses you own. Existing linked SSO identities continue working independently of this list.</div>
+          </div>
+          <div class="card-body">
+            <p id="ssoEmailStatus" role="status">Loading</p>
+            <ul id="ssoEmailList" class="list-unstyled"></ul>
+            <form id="ssoEmailForm" class="row g-2 align-items-end">
+              <div class="col-12 col-lg-6">
+                <label for="ssoEmail" class="form-label small-muted mb-1">Email address</label>
+                <input id="ssoEmail" type="email" class="form-control" maxlength="256" autocomplete="email" required />
+              </div>
+              <div class="col-12 col-lg-3">
+                <button class="btn btn-primary" type="submit">Send verification link</button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <div class="card d-none" id="mailCard">
+          <div class="card-header">
+            <div class="fw-bold">E-mail deliveries</div>
+            <div class="small-muted">Every mail this account asked for, with its delivery state. If something shows as pending or failed, the admin can check the shared outbox.</div>
+          </div>
+          <div class="card-body">
+            <div id="mailSummary" class="small text-secondary mb-2">Loading…</div>
+            <div id="mailList"></div>
+          </div>
+        </div>
+      </div>
     </div>
+    </div>
+
   </main>
-  <script src="/mosp-ui-config.js"></script>
+
   <script src="/vendor/bootstrap/bootstrap.bundle.min.js"></script>
   <script type="module" src="/mosp-shell.js"></script>
-  <script src="/app.js"></script>
-  <script src="/pages/account.js"></script>
+  <script defer src="/app.js"></script>
+  <script defer src="/pages/account.js"></script>
 </body>
 </html>

@@ -12,6 +12,8 @@
   <link rel="stylesheet" href="/vendor/bpmn-js/assets/bpmn-js.css">
   <link rel="stylesheet" href="/vendor/bpmn-js/assets/bpmn-font/css/bpmn.css">
   <link rel="stylesheet" href="/styles.css">
+  <script src="/mosp-ui-config.js"></script>
+  <script src="/vendor/mosp-design-system/theme-boot.js"></script>
 </head>
 <body>
   <div id="navbar"></div>
@@ -326,11 +328,7 @@
               <option value="source">Source code</option>
             </select>
           </div>
-          <div class="mb-3">
-            <label class="form-label" for="driveFolderId">Google Drive folder ID</label>
-            <input class="form-control" id="driveFolderId" placeholder="Optional; falls back to MIDENA_GOOGLE_DRIVE_DEFAULT_FOLDER_ID">
-          </div>
-          <p class="small text-secondary mb-0">The server uses the Google Workspace credentials configured in the MIDENA environment.</p>
+          <p class="small text-secondary mb-0">The export is saved to this installation's Google Drive folder, named after the diagram and its version. Source and SVG come from the saved version; save first to export your latest changes.</p>
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
@@ -359,7 +357,7 @@
     </div>
   </div>
 
-  <script src="/mosp-ui-config.js"></script>
+  
   <script src="/vendor/bootstrap/bootstrap.bundle.min.js"></script>
   <script type="module" src="/mosp-shell.js"></script>
   <script src="/app.js"></script>

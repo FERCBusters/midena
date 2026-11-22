@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "midena-api"
-version = "0.1.0"
+version = "0.2.0"
 description = "MIDENA FastAPI backend"
 authors = ["MIDENA Team <noreply@example.com>"]
 package-mode = false
@@ -12,21 +12,53 @@ uvicorn = {version = "^0.53.0", extras = ["standard"]}
 SQLAlchemy = "^2.0.47"
 alembic = "^1.18.4"
 psycopg = {version = "^3.3.3", extras = ["binary"]}
-psycopg2-binary = "^2.9.11"
 pydantic = "^2"
 pydantic-core = "^2.47"
 pydantic-settings = "^2.13.1"
 python-multipart = "^0.0.32"
-itsdangerous = "^2.2.0"
-passlib = {version = "^1.7.4", extras = ["bcrypt"]}
-bcrypt = "^5.0.0"
 starlette = "^1"
-authlib = "^1.6.8"
-httpx = "^0.28.0"
-google-api-python-client = "^2.187.0"
-google-auth = "^2.41.1"
+
+# OIDC (native RP)
+authlib = "^1.8"
+
+# Local second factor (TOTP + WebAuthn + recovery codes)
+pyotp = "^2.10"
+qrcode = "^8.2"
+webauthn = "^2.8"
+cryptography = ">=50"
+
+# Background jobs (mail outbox, maintenance)
 celery = "^5.6.2"
 redis = "^8"
+joserfc = "^1.7.5"
+httpx2 = "^2.13.1"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=8.3"
+pytest-cov = ">=5"
+ruff = "0.17.0"
+mypy = "1.13"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+filterwarnings = [
+    "ignore::DeprecationWarning:starlette",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["app"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["app"]
+warn_unused_ignores = true
+warn_redundant_casts = true
+check_untyped_defs = true
+no_implicit_optional = true
+ignore_missing_imports = true
+exclude = ["tests/", "alembic/"]
 
 [build-system]
 requires = ["poetry-core>=1.8.0"]

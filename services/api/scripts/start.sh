@@ -30,4 +30,6 @@ echo "[midena-api] running migrations..."
 alembic upgrade head
 
 echo "[midena-api] starting uvicorn..."
-exec uvicorn app.main:app --host "${MIDENA_API_HOST:-0.0.0.0}" --port "${MIDENA_API_PORT:-8080}"
+# Forwarded headers are read by the application, from MIDENA_TRUSTED_PROXY_CIDRS
+# only (app/security/client_addr.py); the server's own rewriting stays off.
+exec uvicorn app.main:app --host "${MIDENA_API_HOST:-0.0.0.0}" --port "${MIDENA_API_PORT:-8080}" --no-proxy-headers

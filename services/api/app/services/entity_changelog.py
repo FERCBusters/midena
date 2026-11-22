@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from typing import Any
-import uuid
 
 from sqlalchemy import desc, or_
 from sqlalchemy.orm import Session
 
+from app.core.datetime_utils import utc_now_naive
 from app.db.models import Diagram, EntityChangelog, Folder, User
 
 _CHANGE_FIELD_LABELS = {
@@ -45,7 +46,10 @@ _ENTITY_LABELS = {
     "diagram_share": "Diagram share",
     "diagram_tag": "Diagram tag",
     "diagram_lock": "Diagram lock",
+    "diagram_chrome": "Diagram header, footer and theme",
 }
+# The entity types the changelog records, and so the only ones a filter names.
+CHANGELOG_ENTITY_TYPES = frozenset(_ENTITY_LABELS)
 
 
 def _clean_scalar(value: Any) -> Any:
@@ -180,7 +184,7 @@ def record_entity_changelog(
         changed_by_username=getattr(user, "username", None),
         request_method=request_method or None,
         request_path=request_path or None,
-        changed_at=datetime.utcnow(),
+        changed_at=utc_now_naive(),
     )
     db.add(entry)
     db.flush()
@@ -267,16 +271,18 @@ def list_entity_changelogs(
         qry = qry.filter(EntityChangelog.entity_id == int(entity_id))
     if username:
         qry = qry.filter(
-            EntityChangelog.changed_by_username.ilike(f"%{username.strip()}%")
+            EntityChangelog.changed_by_username.icontains(
+                username.strip(), autoescape=True
+            )
         )
     if q:
-        needle = f"%{q.strip()}%"
+        needle = q.strip()
         qry = qry.filter(
             or_(
-                EntityChangelog.entity_ref.ilike(needle),
-                EntityChangelog.entity_title.ilike(needle),
-                EntityChangelog.summary.ilike(needle),
-                EntityChangelog.changed_by_username.ilike(needle),
+                EntityChangelog.entity_ref.icontains(needle, autoescape=True),
+                EntityChangelog.entity_title.icontains(needle, autoescape=True),
+                EntityChangelog.summary.icontains(needle, autoescape=True),
+                EntityChangelog.changed_by_username.icontains(needle, autoescape=True),
             )
         )
     total = qry.order_by(None).count()

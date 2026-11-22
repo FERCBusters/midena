@@ -17,10 +17,23 @@ class NotificationHub:
         self._lock = asyncio.Lock()
         self._connections: dict[int, set[WebSocket]] = {}
 
-    async def connect(self, user_id: int, ws: WebSocket) -> None:
-        await ws.accept()
+    async def connect_if_capacity(
+        self, user_id: int, ws: WebSocket, limit: int
+    ) -> bool:
+        """Accept the socket only while the user stays under ``limit``.
+
+        The check and the registration share the lock so overlapping
+        handshakes cannot overshoot the per-user cap.
+        """
+
         async with self._lock:
+            count = len(self._connections.get(user_id) or ())
+            if count >= max(1, int(limit)):
+                await ws.close(code=4429)
+                return False
+            await ws.accept()
             self._connections.setdefault(user_id, set()).add(ws)
+            return True
 
     async def disconnect(self, user_id: int, ws: WebSocket) -> None:
         async with self._lock:

@@ -1,62 +1,68 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
-
 from fastapi import (
     APIRouter,
     Depends,
     HTTPException,
     Request,
     Response,
-    BackgroundTasks,
 )
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.api.payloads import (
-    LoginPayload,
     ChangePasswordPayload,
-    PasswordResetRequestPayload,
-    PasswordResetConfirmPayload,
+    LoginPayload,
 )
 from app.core.config import settings
-from app.db.models import Session as SessionRow, User, PasswordResetToken
+from app.core.datetime_utils import utc_now_naive
+from app.db.models import (
+    LoginDevice,
+    User,
+)
 from app.db.session import get_db
+from app.security import sign_in_throttle as throttle
+from app.security.audit import record_sign_in
 from app.security.auth import (
     ROLE_ADMIN,
     authenticate_user,
     clear_session_cookie,
-    set_session_cookie,
     get_current_user,
     get_password_hash,
-    get_user_by_email,
+    get_user_by_username,
+    session_cookie_name,
+    set_session_cookie,
 )
-from app.security.passwords import verify_password
-
-from app.security.csrf import clear_csrf_cookie, generate_csrf_token, set_csrf_cookie
-from app.security.roles import attach_effective_role
-from app.security.sessions import (
-    create_session,
-    delete_session,
-    delete_all_sessions_for_user,
+from app.security.client_addr import request_allowance_key, request_client_address
+from app.security.csrf import (
+    clear_csrf_cookie,
+    get_csrf_token_from_request,
+    set_csrf_cookie,
+    tokens_match,
 )
 from app.security.oidc import (
     any_sso_enabled,
     build_authorize_redirect,
+    clear_sso_binding,
     configured_sso_providers,
     get_sso_provider,
     handle_callback,
+    linked_account,
+    set_sso_binding,
+    sso_attempt,
 )
-from app.security.rate_limit import check_rate_limit, record_rate_limit_attempt
-from app.security.audit import (
-    log_login_success,
-    log_login_failure,
-    log_logout,
-    log_password_reset_request,
-    log_password_reset_confirm,
-    log_security_alert,
+from app.security.passwords import verify_password
+from app.security.rate_limit import take_rate_limit
+from app.security.roles import attach_effective_role
+from app.security.sessions import (
+    create_session,
+    csrf_token_for,
+    delete_all_sessions_for_user,
+    delete_session,
+    session_row,
 )
-from app.services.mailer import send_password_reset_email
+from app.security.url_safety import safe_relative_route_path
+from app.services import security_notifications
 
 router = APIRouter()
 
@@ -104,91 +110,152 @@ def auth_methods():
         # Same-origin relative paths are always allowed; this list only applies
         # to absolute cross-origin URLs.
         "redirect_allowed_hosts": allowed_hosts,
-        "password_reset_enabled": (
-            bool(getattr(settings, "local_auth_enabled", True))
-            and not any_sso_enabled()
-            and bool((getattr(settings, "smtp_host", "") or "").strip())
-            and bool((getattr(settings, "smtp_from_email", "") or "").strip())
-        ),
-        "password_reset": {
-            "request_url": "/v1/auth/request-password-reset",
-            "page_url": "/forgot-password.html",
-        },
     }
-
-
-def _get_client_ip(request: Request) -> str:
-    if settings.trust_proxy_headers:
-        forwarded = request.headers.get("X-Forwarded-For")
-        if forwarded:
-            return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
-
-
-def _get_user_agent(request: Request) -> str | None:
-    return request.headers.get("User-Agent") or None
 
 
 @router.post("/v1/auth/login")
 def login(
     payload: LoginPayload, request: Request, db: Session = Depends(get_db)
 ) -> Response:
+    """Password sign-in under the shared throttling policy.
+
+    See app/security/sign_in_throttle.py: a browser that has signed in to this
+    account before is heard whatever an attacker does elsewhere, and every
+    other browser shares the account's growing waits.
+    """
+
     if not bool(getattr(settings, "local_auth_enabled", True)):
         raise HTTPException(status_code=404, detail="Local auth disabled")
 
-    client_ip = _get_client_ip(request)
-    user_agent = _get_user_agent(request)
     username = (payload.username or "").strip()
-    rate_id = f"login:{client_ip}"
+    # A blank username is refused before any throttling or password work.
+    if not username or not throttle.login_name(username):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
 
-    allowed, info = check_rate_limit(db, rate_id, max_attempts=10, window_seconds=300)
-    if not allowed:
-        log_security_alert(
-            db,
-            "rate_limit_exceeded",
-            {"action": "login", "username": username},
-            None,
-            client_ip,
-            user_agent,
+    now = utc_now_naive()
+    key = throttle.name_key(username)
+    device = throttle.recognised_device(
+        db, request.cookies.get(throttle.device_cookie_name()), key, now
+    )
+
+    if device is not None and not throttle.reserve_device_attempt(db, device):
+        # Its allowance is spent, so it is heard as any other browser.
+        device = None
+    if device is None:
+        # Looking the cookie up left this request holding a connection, and
+        # the allowance takes its own: let the first go, so sign-ins sent
+        # together each need one connection at a time and cannot hold the
+        # whole pool while they wait for a second.
+        db.rollback()
+        allowed, retry = take_rate_limit(
+            request_allowance_key("login", request),
+            max_attempts=throttle.ADDRESS_ATTEMPTS,
+            window_seconds=throttle.ADDRESS_WINDOW_SECONDS,
         )
-        return JSONResponse(
-            {"detail": "Too many login attempts", "retry_after": info["retry_after"]},
-            status_code=429,
-            headers={"Retry-After": str(info["retry_after"] // 1000)},
-        )
+        if not allowed:
+            return _limited(retry)
 
-    record_rate_limit_attempt(db, rate_id)
-
-    client_ip = _get_client_ip(request)
-    user_agent = _get_user_agent(request)
+        admitted, retry = throttle.reserve_unrecognised_attempt(db, key, now)
+        if not admitted:
+            return _limited(retry)
 
     user = authenticate_user(db, payload.username, payload.password)
     if not user:
-        record_rate_limit_attempt(db, f"login_fail:{username}")
-        log_login_failure(db, username, "invalid_credentials", client_ip, user_agent)
+        if device is not None:
+            throttle.device_failed(db, device)
+        record_sign_in(
+            db,
+            request,
+            method="local",
+            outcome="failed",
+            account=get_user_by_username(db, username),
+        )
+        db.commit()
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
-    delete_all_sessions_for_user(db, user.id)
+    # The password is proven: the account's count ends, and this browser is
+    # recognised for it from now on (its previous token retired).
+    throttle.clear_throttle(db, key)
+    token = throttle.issue_device(
+        db, user_id=user.id, key=key, now=now, replaces=device
+    )
+    db.commit()
 
+    from app.security import mfa
+
+    if user.mfa_enabled or mfa.required(db, user):
+        # The password is proven; the browser now holds the ceremony cookie
+        # while /v1/auth/mfa/* runs outside of any session.
+        response = mfa.start(db, user, request)
+    else:
+        response = complete_local_login(db, user, request)
+    throttle.set_device_cookie(response, token)
+    return response
+
+
+def _limited(retry_after: int) -> JSONResponse:
+    retry = max(1, int(retry_after))
+    return JSONResponse(
+        {"detail": throttle.LIMITED, "retry_after": retry},
+        status_code=429,
+        headers={"Retry-After": str(retry)},
+    )
+
+
+def _record_completed_sign_in(
+    db: Session, request: Request, user: User, *, method: str
+) -> bool:
+    """The audit row and known-address check for a completed sign-in.
+
+    The caller commits. Returns True when an unfamiliar-address notice was
+    queued, so the caller can hand it to the mail worker after committing.
+    """
+    record_sign_in(db, request, method=method, outcome="success", account=user)
+    return security_notifications.record_login(
+        db, user, ip=request_client_address(request)
+    )
+
+
+def _kick_delivery() -> None:
+    from app.tasks.notifications import kick_delivery
+
+    kick_delivery()
+
+
+def complete_local_login(
+    db: Session,
+    user: User,
+    request: Request,
+    *,
+    mfa_verified: bool = False,
+    verified_version: int | None = None,
+):
+    # The account's earlier sessions end only once sign-in is complete, any
+    # second factor included: a password alone cannot sign anyone out.
+    delete_all_sessions_for_user(db, user.id)
     sid = create_session(
         db,
         user_id=user.id,
         ttl_seconds=int(settings.session_ttl_seconds),
         auth_method="local",
+        mfa_verified=bool(mfa_verified),
+        mfa_version=int(user.mfa_version)
+        if verified_version is None
+        else int(verified_version),
     )
 
-    try:
-        user.last_login_at = datetime.utcnow()
-        db.add(user)
-        db.commit()
-        request.state.user = user
-
-        log_login_success(db, user.id, "local", client_ip, user_agent)
-    except Exception:
-        db.rollback()
+    # Signing in is complete only here, any second factor included.
+    user.last_login_at = utc_now_naive()
+    db.add(user)
+    notice_queued = _record_completed_sign_in(db, request, user, method="local")
+    db.commit()
+    if notice_queued:
+        _kick_delivery()
+    request.state.user = user
+    request.state.audit_username = user.username
 
     eff = attach_effective_role(db, user)
-    csrf_token = generate_csrf_token()
+    csrf_token = csrf_token_for(sid)
 
     resp = JSONResponse(
         {
@@ -204,14 +271,39 @@ def login(
     return resp
 
 
+# Sign-in starts each address may make in SSO_START_WINDOW_SECONDS.
+SSO_STARTS_PER_ADDRESS = 20
+SSO_START_WINDOW_SECONDS = 300
+
+
+def _limit_sso_start(request: Request) -> bool:
+    """A small per-address allowance on SSO starts: each writes a login-state
+    row, so an unauthenticated flood must not churn the database."""
+    allowed, _retry = take_rate_limit(
+        request_allowance_key("sso_start", request),
+        max_attempts=SSO_STARTS_PER_ADDRESS,
+        window_seconds=SSO_START_WINDOW_SECONDS,
+    )
+    return allowed
+
+
+async def _start_sso(request: Request, db: Session, *, provider_key: str) -> Response:
+    if not _limit_sso_start(request):
+        raise HTTPException(status_code=429, detail="Too many requests")
+    url = await build_authorize_redirect(
+        request,
+        db,
+        next_url=request.query_params.get("next"),
+        provider_key=provider_key,
+    )
+    # The browser that starts a sign-in is the only one that can finish it.
+    return set_sso_binding(RedirectResponse(url, status_code=302), request)
+
+
 @router.get("/v1/auth/oidc/start")
 async def oidc_start(request: Request, db: Session = Depends(get_db)):
     # Stable URL alias for the generic OpenID Connect provider.
-    next_url = request.query_params.get("next")
-    url = await build_authorize_redirect(
-        request, db, next_url=next_url, provider_key="oidc"
-    )
-    return RedirectResponse(url, status_code=302)
+    return await _start_sso(request, db, provider_key="oidc")
 
 
 @router.get("/v1/auth/oidc/callback")
@@ -222,11 +314,7 @@ async def oidc_callback(request: Request, db: Session = Depends(get_db)):
 
 @router.get("/v1/auth/sso/{provider_key}/start")
 async def sso_start(provider_key: str, request: Request, db: Session = Depends(get_db)):
-    next_url = request.query_params.get("next")
-    url = await build_authorize_redirect(
-        request, db, next_url=next_url, provider_key=provider_key
-    )
-    return RedirectResponse(url, status_code=302)
+    return await _start_sso(request, db, provider_key=provider_key)
 
 
 @router.get("/v1/auth/sso/{provider_key}/callback")
@@ -239,45 +327,65 @@ async def sso_callback(
 async def _complete_sso_callback(
     request: Request, db: Session, *, provider_key: str
 ) -> Response:
-    user, next_url, id_token, provider = await handle_callback(
-        request, db, provider_key=provider_key
-    )
+    try:
+        user, next_url, id_token, provider = await handle_callback(
+            request, db, provider_key=provider_key
+        )
+    except HTTPException as error:
+        # Audit a refusal of a sign-in this browser started, naming the
+        # account only when the provider's identity is linked to one.
+        attempted = sso_attempt(request)
+        if attempted is not None:
+            db.rollback()
+            record_sign_in(
+                db,
+                request,
+                method=attempted,
+                outcome="failed",
+                account=linked_account(error),
+            )
+            db.commit()
+        raise
     request.state.user = user
+    request.state.audit_username = user.username
 
     delete_all_sessions_for_user(db, user.id)
+    notice_queued = _record_completed_sign_in(db, request, user, method=provider.key)
 
-    log_login_success(
-        db, user.id, provider.key, _get_client_ip(request), _get_user_agent(request)
-    )
-
+    # Creating the session commits the sign-in's records with it.
     sid = create_session(
         db,
         user_id=user.id,
         ttl_seconds=int(settings.session_ttl_seconds),
         auth_method=provider.key,
-        oidc_id_token=id_token,
+        # Kept only to hint the provider's own sign-out; without that
+        # endpoint the token has no use here and is not stored.
+        oidc_id_token=id_token if provider.end_session_endpoint.strip() else None,
     )
-    csrf_token = generate_csrf_token()
+    if notice_queued:
+        _kick_delivery()
 
-    dest = next_url or "/index.html"
-    resp = RedirectResponse(dest, status_code=302)
+    resp = RedirectResponse(next_url or "/index.html", status_code=302)
     set_session_cookie(resp, sid)
-    set_csrf_cookie(resp, csrf_token)
+    set_csrf_cookie(resp, csrf_token_for(sid))
+    clear_sso_binding(resp)
     return resp
 
 
 @router.post("/v1/auth/logout")
 def logout(request: Request, db: Session = Depends(get_db)) -> Response:
-    sid = request.cookies.get(settings.session_cookie_name) or ""
+    sid = request.cookies.get(session_cookie_name()) or ""
     if sid:
         delete_session(db, sid)
 
     user = getattr(request.state, "user", None)
     if user and isinstance(user, User):
         delete_all_sessions_for_user(db, user.id)
-        log_logout(db, user.id, _get_client_ip(request), _get_user_agent(request))
+
+    from app.security import mfa
 
     resp = Response(status_code=204)
+    mfa.cancel(db, request, resp)
     clear_session_cookie(resp)
     clear_csrf_cookie(resp)
     return resp
@@ -288,20 +396,9 @@ def _local_password_features_enabled() -> bool:
     return bool(getattr(settings, "local_auth_enabled", True)) and not any_sso_enabled()
 
 
-def _hash_reset_token(token: str) -> str:
-    import hashlib
-
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
-
-
-def _derive_public_base_url(request: Request) -> str:
-    configured = (getattr(settings, "public_base_url", "") or "").strip()
-    if configured:
-        return configured.rstrip("/")
-    try:
-        return str(request.base_url).rstrip("/")
-    except Exception:
-        return ""
+# Current-password confirmations a session may make, per address (the sign-in
+# allowance) and per account within the same window, as KEEN limits them.
+PASSWORD_CHANGES_PER_ACCOUNT = 15
 
 
 @router.post("/v1/auth/change-password")
@@ -313,15 +410,32 @@ def change_password(
 ) -> Response:
     if not _local_password_features_enabled():
         raise HTTPException(status_code=404, detail="Password change disabled")
+    if settings.trust_remote_user:
+        raise HTTPException(
+            status_code=403,
+            detail="Password changes are disabled when MIDENA_TRUST_REMOTE_USER is enabled",
+        )
+
+    # A session holder must not be able to test many current passwords, from
+    # one address or by spreading attempts across addresses.
+    for attempt_id, allowance in (
+        (request_allowance_key("password_change", request), throttle.ADDRESS_ATTEMPTS),
+        (f"pw_change:{me.id}", PASSWORD_CHANGES_PER_ACCOUNT),
+    ):
+        allowed, _retry = take_rate_limit(
+            attempt_id,
+            max_attempts=allowance,
+            window_seconds=throttle.ADDRESS_WINDOW_SECONDS,
+        )
+        if not allowed:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many password change attempts. Please try again later.",
+            )
 
     # Only allow password change for local sessions.
-    sid = (request.cookies.get(settings.session_cookie_name) or "").strip()
-    row = (
-        db.query(SessionRow).filter(SessionRow.session_id == sid).one_or_none()
-        if sid
-        else None
-    )
-    if row and str(getattr(row, "auth_method", "") or "") != "local":
+    row = session_row(db, request.cookies.get(session_cookie_name()))
+    if row and row.auth_method != "local":
         raise HTTPException(
             status_code=400,
             detail="Password changes are not available for SSO sessions",
@@ -330,166 +444,46 @@ def change_password(
     if payload.new_password != payload.confirm_password:
         raise HTTPException(status_code=400, detail="Passwords do not match")
 
-    if not verify_password(payload.current_password, me.password_hash):
-        raise HTTPException(status_code=400, detail="Current password is incorrect")
-
-    me.password_hash = get_password_hash(payload.new_password)
-    db.add(me)
-    db.commit()
-    return Response(status_code=204)
-
-
-@router.post("/v1/auth/request-password-reset")
-def request_password_reset(
-    payload: PasswordResetRequestPayload,
-    request: Request,
-    background: BackgroundTasks,
-    db: Session = Depends(get_db),
-) -> Response:
-    if not _local_password_features_enabled():
-        # Don't leak configuration details.
-        return Response(status_code=204)
-
-    smtp_host = (getattr(settings, "smtp_host", "") or "").strip()
-    from_email = (getattr(settings, "smtp_from_email", "") or "").strip()
-    if not smtp_host or not from_email:
-        # Still avoid account enumeration.
-        return Response(status_code=204)
-
-    ident = (payload.identifier or "").strip()
-    if not ident:
-        return Response(status_code=204)
-
-    user = None
-    if "@" in ident:
-        ident_l = ident.lower()
-        user = (
-            get_user_by_email(db, ident_l)
-            or db.query(User).filter(User.username == ident).one_or_none()
-        )
-    else:
-        user = db.query(User).filter(User.username == ident).one_or_none()
-
-    # Always return 204 to avoid enumeration.
-    if not user or not bool(getattr(user, "is_active", False)):
-        log_password_reset_request(
-            db, None, _get_client_ip(request), _get_user_agent(request)
-        )
-        return Response(status_code=204)
-
-    recipient = (getattr(user, "email", None) or "").strip()
-    if not recipient:
-        try:
-            from app.db.models import UserEmail
-
-            email_row = (
-                db.query(UserEmail)
-                .filter(UserEmail.user_id == user.id)
-                .order_by(UserEmail.is_primary.desc(), UserEmail.email.asc())
-                .first()
-            )
-            if email_row:
-                recipient = str(email_row.email or "").strip()
-        except Exception:
-            recipient = ""
-    if not recipient:
-        # Fallback: if username is an email.
-        if "@" in (user.username or ""):
-            recipient = user.username.strip()
-    if not recipient:
-        log_password_reset_request(
-            db, user.id, _get_client_ip(request), _get_user_agent(request)
-        )
-        return Response(status_code=204)
-
-    import secrets
-
-    token = secrets.token_urlsafe(32)
-    token_hash = _hash_reset_token(token)
-
-    expires = datetime.utcnow() + timedelta(
-        minutes=int(getattr(settings, "password_reset_token_ttl_minutes", 60))
-    )
-
-    row = PasswordResetToken(
-        user_id=user.id, token_hash=token_hash, expires_at=expires, used_at=None
-    )
-    db.add(row)
-    db.commit()
-
-    base = _derive_public_base_url(request)
-    reset_link = (
-        f"{base}/reset-password.html?token={token}"
-        if base
-        else f"/reset-password.html?token={token}"
-    )
-
-    log_password_reset_request(
-        db, user.id, _get_client_ip(request), _get_user_agent(request)
-    )
-
-    # Send email in the background to keep response quick.
-    background.add_task(
-        send_password_reset_email,
-        to_email=recipient,
-        username=user.username,
-        reset_link=reset_link,
-        expires_minutes=int(getattr(settings, "password_reset_token_ttl_minutes", 60)),
-    )
-
-    return Response(status_code=204)
-
-
-@router.post("/v1/auth/reset-password")
-def reset_password(
-    payload: PasswordResetConfirmPayload,
-    db: Session = Depends(get_db),
-) -> Response:
-    if not _local_password_features_enabled():
-        raise HTTPException(status_code=404, detail="Password reset disabled")
-
-    if payload.new_password != payload.confirm_password:
-        raise HTTPException(status_code=400, detail="Passwords do not match")
-
-    token = (payload.token or "").strip()
-    if not token:
-        raise HTTPException(status_code=400, detail="Invalid token")
-
-    token_hash = _hash_reset_token(token)
-    row = (
-        db.query(PasswordResetToken)
-        .filter(PasswordResetToken.token_hash == token_hash)
+    user_row = (
+        db.query(User)
+        .filter(User.id == me.id)
+        .populate_existing()
+        .with_for_update()
         .one_or_none()
     )
-    if not row:
-        raise HTTPException(status_code=400, detail="Invalid or expired token")
+    if not user_row:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not verify_password(payload.current_password, user_row.password_hash):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
 
-    now = datetime.utcnow()
-    if row.used_at is not None or row.expires_at <= now:
-        raise HTTPException(status_code=400, detail="Invalid or expired token")
-
-    user = db.query(User).filter(User.id == row.user_id).one_or_none()
-    if not user or not bool(getattr(user, "is_active", False)):
-        raise HTTPException(status_code=400, detail="Invalid token")
-
-    user.password_hash = get_password_hash(payload.new_password)
-    row.used_at = now
-
-    db.add(user)
-    db.add(row)
+    try:
+        user_row.password_hash = get_password_hash(
+            payload.new_password, username=user_row.username
+        )
+    except ValueError as problem:
+        raise HTTPException(status_code=400, detail=str(problem)) from problem
+    # As in KEEN, the new password ends every local session of the account,
+    # this one included, and every browser's recognition: each signs in again.
+    user_row.mfa_version += 1
+    db.query(LoginDevice).filter(LoginDevice.user_id == user_row.id).delete(
+        synchronize_session=False
+    )
+    notice_queued = security_notifications.enqueue(
+        db, user_row, "password-changed", ip=request_client_address(request)
+    )
+    db.add(user_row)
     db.commit()
-
-    log_password_reset_confirm(db, user.id, None, None)
-    return Response(status_code=204)
+    if notice_queued:
+        _kick_delivery()
+    response = Response(status_code=204)
+    clear_session_cookie(response)
+    clear_csrf_cookie(response)
+    return response
 
 
 def _safe_next(next_url: str | None) -> str | None:
-    raw = (next_url or "").strip()
-    if not raw:
-        return None
-    if raw.startswith("/") and not raw.startswith("//") and "://" not in raw:
-        return raw
-    return None
+    """Same-origin relative route only; one shared helper decides safety."""
+    return safe_relative_route_path(next_url)
 
 
 def _derive_absolute_post_logout_redirect(request: Request, auth_method: str) -> str:
@@ -498,35 +492,46 @@ def _derive_absolute_post_logout_redirect(request: Request, auth_method: str) ->
     if configured:
         return configured
 
-    # Derive from the incoming request. If behind TLS termination and the
-    # scheme/host is incorrect, set the provider-specific post-logout URI.
-    try:
-        base = str(request.base_url).rstrip("/")
-    except Exception:
-        base = ""
-    if not base:
-        return ""
-    return f"{base}/login.html"
+    # A post-logout redirect address is never derived from the request: the
+    # Host header is client-controlled, so any derived value could send the
+    # browser to an attacker host. With no explicit configuration the provider
+    # lands on its own default page.
+    return ""
 
 
 @router.get("/v1/auth/logout")
 def logout_redirect(request: Request, db: Session = Depends(get_db)) -> Response:
     """Browser-friendly logout endpoint.
 
-    - Always clears the local session + CSRF cookies.
-    - If the current session was created via OIDC and an end-session endpoint is
-      configured, performs RP-initiated logout by redirecting to the provider.
+    - A `csrf` parameter must match the CSRF cookie before the server-side
+      session is destroyed, so a cross-site link cannot log a user out.
+    - If the current session was created via OIDC and an end-session endpoint
+      is configured, performs RP-initiated logout by redirecting to the
+      provider.
     """
 
-    sid = (request.cookies.get(settings.session_cookie_name) or "").strip()
+    sid = (request.cookies.get(session_cookie_name()) or "").strip()
+    supplied = (request.query_params.get("csrf") or "").strip()
+    csrf_cookie = get_csrf_token_from_request(request)
+    # The parameter repeats the cookie and is the session's own token.
+    csrf_ok = bool(
+        csrf_cookie
+        and tokens_match(supplied, csrf_cookie)
+        and (not sid or tokens_match(supplied, csrf_token_for(sid)))
+    )
+    if not csrf_ok:
+        # Leave authentication state and every cookie untouched, with or
+        # without a session, and land somewhere harmless.
+        return RedirectResponse("/index.html", status_code=302)
+
     auth_method = ""
     oidc_id_token = ""
 
     if sid:
-        row = db.query(SessionRow).filter(SessionRow.session_id == sid).one_or_none()
+        row = session_row(db, sid)
         if row:
-            auth_method = str(getattr(row, "auth_method", "") or "")
-            oidc_id_token = str(getattr(row, "oidc_id_token", "") or "")
+            auth_method = row.auth_method
+            oidc_id_token = row.oidc_id_token or ""
             try:
                 db.delete(row)
                 db.commit()
@@ -541,7 +546,7 @@ def logout_redirect(request: Request, db: Session = Depends(get_db)) -> Response
     client_id = (provider.client_id if provider else "").strip()
 
     if auth_method != "local" and end_session:
-        from urllib.parse import urlencode, urlsplit, urlunsplit, parse_qsl
+        from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
         post_logout = _derive_absolute_post_logout_redirect(request, auth_method)
         params = dict(parse_qsl(urlsplit(end_session).query, keep_blank_values=True))
@@ -567,7 +572,10 @@ def logout_redirect(request: Request, db: Session = Depends(get_db)) -> Response
             )
         )
 
+    from app.security import mfa
+
     resp = RedirectResponse(dest, status_code=302)
+    mfa.cancel(db, request, resp)
     clear_session_cookie(resp)
     clear_csrf_cookie(resp)
     return resp
@@ -580,8 +588,8 @@ def auth_check(request: Request) -> Response:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     resp = Response(status_code=204)
-    resp.headers["X-MIDENA-User"] = user.username
-    resp.headers["X-MIDENA-Role"] = getattr(user, "effective_role", None) or user.role
+    resp.headers["X-Midena-User"] = user.username
+    resp.headers["X-Midena-Role"] = getattr(user, "effective_role", None) or user.role
     return resp
 
 
@@ -596,6 +604,6 @@ def auth_check_admin(request: Request) -> Response:
         raise HTTPException(status_code=403, detail="Admin role required")
 
     resp = Response(status_code=204)
-    resp.headers["X-MIDENA-User"] = user.username
-    resp.headers["X-MIDENA-Role"] = eff
+    resp.headers["X-Midena-User"] = user.username
+    resp.headers["X-Midena-Role"] = eff
     return resp
