@@ -98,7 +98,7 @@ def test_diagram_saves_take_more_than_a_form_and_no_more_than_their_class(client
 
 
 def test_a_cookie_name_with_hidden_bytes_is_not_read_as_the_session(client):
-    from myf.security.request_limits import screen_cookies
+    from mosp.security.request_limits import screen_cookies
 
     scope = {
         "type": "http",
@@ -118,7 +118,7 @@ def test_a_cookie_name_with_hidden_bytes_is_not_read_as_the_session(client):
 
 @pytest.fixture()
 def bootstrap(monkeypatch):
-    from myf.middleware import bootstrap_initial_admin
+    from mosp.middleware import bootstrap_initial_admin
 
     def run(username, password):
         monkeypatch.setattr(settings, "bootstrap_admin_username", username)

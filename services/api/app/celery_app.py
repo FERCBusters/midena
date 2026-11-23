@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from celery import Celery
-from myf import worker as myf_worker
+from mosp import worker as mosp_worker
 
 from app.core.config import settings
 
@@ -60,4 +60,4 @@ celery_app.conf.update(
 )
 
 # Each task's deadline, and its statement labels with MIDENA_SQL_TRACE on.
-myf_worker.connect(celery_app, sql_trace=settings.sql_trace)
+mosp_worker.connect(celery_app, sql_trace=settings.sql_trace)

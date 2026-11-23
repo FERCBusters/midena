@@ -14,8 +14,8 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
-from myf.core.datetime_utils import utc_now_naive
-from myf.services.mailer import send_email, smtp_configured
+from mosp.core.datetime_utils import utc_now_naive
+from mosp.services.mailer import send_email, smtp_configured
 from sqlalchemy.orm import Session
 
 from app.db.models import Notification
@@ -175,7 +175,7 @@ def send_diagram_share_email(
     The link comes from MIDENA_PUBLIC_BASE_URL, never from a request's Host
     header, which a client chooses.
     """
-    from myf.services.mailer import sender_name
+    from mosp.services.mailer import sender_name
 
     body = (
         "Hello,\n\n"

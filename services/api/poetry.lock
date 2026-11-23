@@ -1096,7 +1096,7 @@ files = [
 ]
 
 [[package]]
-name = "myf"
+name = "mosp"
 version = "0.1.0"
 description = "My Framework: the shared backend of KEEN, OSPMAE and MIDENA (sign-in, sessions, SSO, MFA, CSRF, RBAC and security primitives)"
 optional = false
@@ -1126,7 +1126,7 @@ webauthn = "^2.8"
 
 [package.source]
 type = "git"
-url = "https://github.com/FERCBusters/myf.git"
+url = "https://github.com/FERCBusters/mosp.git"
 reference = "6f821f5f8edb76274bc5d60a8c6330447ee282af"
 resolved_reference = "6f821f5f8edb76274bc5d60a8c6330447ee282af"
 

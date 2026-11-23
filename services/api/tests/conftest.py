@@ -100,7 +100,7 @@ def _fresh_database():
 def valkey(monkeypatch):
     """Sessions, allowances and sign-in throttles in a private in-memory
     Valkey for each test."""
-    from myf.core import valkey as store
+    from mosp.core import valkey as store
 
     server = fakeredis.FakeServer()
 
@@ -213,10 +213,10 @@ ROLE_PERMISSIONS = {
 
 
 def make_user(username: str, password: str, role: str = "admin", **kw):
-    """An account with myf's role (admin, normal or inherit), or one of
+    """An account with mosp's role (admin, normal or inherit), or one of
     MIDENA's former role names given as the permissions it held."""
     from app.db.models import Permission
-    from myf.security.auth import create_user
+    from mosp.security.auth import create_user
 
     codes = ROLE_PERMISSIONS.get(role, ())
     if role in ROLE_PERMISSIONS:

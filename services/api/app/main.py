@@ -4,18 +4,18 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket
 from fastapi.exceptions import RequestValidationError
-from myf import middleware
-from myf.api.errors import domain_error_response, validation_error_response
-from myf.api.routes import account, auth, mfa, sso_emails
-from myf.api.sql_trace import RequestLabelMiddleware
-from myf.realtime import sockets
-from myf.realtime.notifications import (
+from mosp import middleware
+from mosp.api.errors import domain_error_response, validation_error_response
+from mosp.api.routes import account, auth, mfa, sso_emails
+from mosp.api.sql_trace import RequestLabelMiddleware
+from mosp.realtime import sockets
+from mosp.realtime.notifications import (
     start_notification_listener,
     stop_notification_listener,
 )
-from myf.security.headers import SecurityHeadersMiddleware
-from myf.security.request_limits import RequestBodyLimitMiddleware
-from myf.services.errors import DomainError
+from mosp.security.headers import SecurityHeadersMiddleware
+from mosp.security.request_limits import RequestBodyLimitMiddleware
+from mosp.services.errors import DomainError
 from starlette.concurrency import run_in_threadpool
 
 from app.api.routes import router as api_router
@@ -69,7 +69,7 @@ app = FastAPI(
 
 @app.websocket("/ws/notifications")
 async def ws_notifications(websocket: WebSocket):
-    """A signed-in browser's notification socket (myf.realtime.sockets)."""
+    """A signed-in browser's notification socket (mosp.realtime.sockets)."""
     await sockets.serve(websocket)
 
 
@@ -79,12 +79,12 @@ def root():
 
 
 # Signing in and out, second factors, single sign-on, and the account's own
-# password and SSO addresses (myf).
+# password and SSO addresses (mosp).
 for router in (auth.router, mfa.router, account.router, sso_emails.router):
     app.include_router(router, tags=["auth"])
 app.include_router(api_router)
 
-# Authentication, CSRF and the audit trail (myf), inside the middleware below.
+# Authentication, CSRF and the audit trail (mosp), inside the middleware below.
 middleware.install(app)
 # Byte limits apply before any middleware reads the body.
 app.add_middleware(RequestBodyLimitMiddleware)

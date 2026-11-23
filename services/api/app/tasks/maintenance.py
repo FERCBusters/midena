@@ -1,8 +1,8 @@
 """Housekeeping: expired and spent rows must not accumulate without bound.
 
 Expired sign-in states, second-factor challenges and SSO address proofs
-(myf.services.housekeeping), expired diagram locks and audit rows past their
-retention (myf.services.audit_retention) are removed on a beat schedule, so
+(mosp.services.housekeeping), expired diagram locks and audit rows past their
+retention (mosp.services.audit_retention) are removed on a beat schedule, so
 an attacker's floods or normal traffic cannot grow those tables forever.
 Sessions, sign-in throttles and allowances live in Valkey and expire there.
 """
@@ -10,8 +10,8 @@ Sessions, sign-in throttles and allowances live in Valkey and expire there.
 from __future__ import annotations
 
 from celery.utils.log import get_task_logger
-from myf.core.datetime_utils import utc_now_naive
-from myf.services import audit_retention, housekeeping
+from mosp.core.datetime_utils import utc_now_naive
+from mosp.services import audit_retention, housekeeping
 
 from app.celery_app import celery_app
 from app.db.models import DiagramLock

@@ -1,7 +1,7 @@
 """MIDENA's permission catalogue.
 
-Accounts hold myf's roles (admin, normal, inherit) and these permissions,
-directly or through their groups; myf.security.permissions answers whether an
+Accounts hold mosp's roles (admin, normal, inherit) and these permissions,
+directly or through their groups; mosp.security.permissions answers whether an
 account holds one. An administrator holds every permission.
 """
 

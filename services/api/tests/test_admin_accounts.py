@@ -1,4 +1,4 @@
-"""Account administration on myf's model: creating, changing, resetting and
+"""Account administration on mosp's model: creating, changing, resetting and
 deleting accounts, direct permissions, the audit readers and the outboxes."""
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ import pytest
 from app.db.models import Notification, Permission, SecurityNotification, User
 from app.db.session import SessionLocal
 from app.services import notifications
-from myf.services import security_notifications
+from mosp.services import security_notifications
 
 from tests.conftest import auth_client, generated_password, make_user
 from tests.support import csrf, ok, signed_in

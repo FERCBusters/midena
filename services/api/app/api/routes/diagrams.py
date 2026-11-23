@@ -12,15 +12,15 @@ from xml.etree import ElementTree as ET
 import anyio
 from fastapi import Depends, HTTPException, Query, Request
 from fastapi.responses import Response
-from myf import host
-from myf.api.routing import Router
-from myf.core.datetime_utils import utc_now_naive
-from myf.core.valkey import get_valkey
-from myf.security.permissions import has_permission
-from myf.security.rate_limit import sliding_window_allow
-from myf.security.roles import ROLE_ADMIN, attach_effective_role
-from myf.security.svg import SvgError, sanitise_svg
-from myf.security.xml import parse_untrusted_xml
+from mosp import host
+from mosp.api.routing import Router
+from mosp.core.datetime_utils import utc_now_naive
+from mosp.core.valkey import get_valkey
+from mosp.security.permissions import has_permission
+from mosp.security.rate_limit import sliding_window_allow
+from mosp.security.roles import ROLE_ADMIN, attach_effective_role
+from mosp.security.svg import SvgError, sanitise_svg
+from mosp.security.xml import parse_untrusted_xml
 from sqlalchemy import String, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session

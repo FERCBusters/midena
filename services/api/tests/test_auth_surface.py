@@ -1,7 +1,7 @@
-"""MIDENA's names on myf's sign-in surface: its cookies, the check
+"""MIDENA's names on mosp's sign-in surface: its cookies, the check
 header nginx reads, and the methods it advertises.
 
-myf's suite covers signing in and out, CSRF and the providers."""
+mosp's suite covers signing in and out, CSRF and the providers."""
 
 from __future__ import annotations
 

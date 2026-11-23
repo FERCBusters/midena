@@ -1,6 +1,6 @@
 """MIDENA's mail outbox and maintenance sweep (no network).
 
-The transport, redaction and notification hub are myf's, and myf's suite
+The transport, redaction and notification hub are mosp's, and mosp's suite
 covers them.
 """
 
@@ -12,7 +12,7 @@ from app.db.models import AuditLog, DiagramLock, Notification
 from app.db.session import SessionLocal
 from app.services import notifications
 from app.tasks.maintenance import sweep_expired_rows
-from myf.core.datetime_utils import utc_now_naive
+from mosp.core.datetime_utils import utc_now_naive
 
 from tests.conftest import auth_client
 from tests.conftest import db as db_fixture  # noqa: F401

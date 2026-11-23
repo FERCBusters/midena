@@ -3,17 +3,17 @@ from __future__ import annotations
 import uuid
 
 from fastapi import Depends, HTTPException, Request
-from myf.api.routing import Router
-from myf.core.datetime_utils import utc_now_naive
-from myf.core.valkey import get_valkey
-from myf.security.auth import cookie_name
-from myf.security.csrf import get_csrf_token_from_request
-from myf.security.oidc import configured_sso_providers
-from myf.security.permissions import get_effective_permission_codes
-from myf.security.regex import scan_pattern
-from myf.security.roles import attach_effective_role
-from myf.security.sessions import get_session
-from myf.security.urls import same_site_path
+from mosp.api.routing import Router
+from mosp.core.datetime_utils import utc_now_naive
+from mosp.core.valkey import get_valkey
+from mosp.security.auth import cookie_name
+from mosp.security.csrf import get_csrf_token_from_request
+from mosp.security.oidc import configured_sso_providers
+from mosp.security.permissions import get_effective_permission_codes
+from mosp.security.regex import scan_pattern
+from mosp.security.roles import attach_effective_role
+from mosp.security.sessions import get_session
+from mosp.security.urls import same_site_path
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
@@ -407,7 +407,7 @@ def _normalize_shortcut_url(value: str) -> str:
     """A shortcut leads to a page of this site only.
 
     The payload has already refused anything but a path on this site or an
-    HTTP(S) URL without credentials (myf.security.urls.external_url); an
+    HTTP(S) URL without credentials (mosp.security.urls.external_url); an
     absolute URL, and a path whose first segment reads as a scheme
     ("/javascript:..."), are refused here.
     """

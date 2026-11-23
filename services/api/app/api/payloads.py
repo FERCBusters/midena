@@ -4,8 +4,8 @@ import re
 import uuid
 from typing import Annotated, Any, Literal
 
-from myf.security.passwords import MAX_PASSWORD_LENGTH
-from myf.security.urls import external_url
+from mosp.security.passwords import MAX_PASSWORD_LENGTH
+from mosp.security.urls import external_url
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
 from app.api.deps import DB_INT_MAX

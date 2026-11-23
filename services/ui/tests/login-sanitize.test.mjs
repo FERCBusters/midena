@@ -44,7 +44,7 @@ test("backslash and control-character bypasses fall back", () => {
 });
 
 test("a completed sign-in never leaves for another site", () => {
-  // As the server's own sign-in redirects (myf's same_site_path), every
+  // As the server's own sign-in redirects (mosp's same_site_path), every
   // destination is a path on this site.
   for (const destination of [
     "https://partner.example.com/ok",

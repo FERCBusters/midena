@@ -18,7 +18,7 @@ from typing import Sequence, Union
 
 import sqlalchemy as sa
 from alembic import op
-from myf.security.names import login_key
+from mosp.security.names import login_key
 
 # revision identifiers, used by Alembic.
 revision: str = "0002_user_login_keys"

@@ -42,7 +42,7 @@ def test_the_root_names_the_service(client):
 
 
 def test_both_outboxes_drain_and_one_failing_leaves_the_other(monkeypatch):
-    from myf.services import security_notifications
+    from mosp.services import security_notifications
 
     monkeypatch.setattr(tasks.notifications, "deliver_pending", lambda limit: 2)
 

@@ -1,5 +1,5 @@
 """Deny by default: every write is declared in MIDENA's route policy or
-myf's, every declaration names a served route, and anything not declared is
+mosp's, every declaration names a served route, and anything not declared is
 refused, with or without an account."""
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from app.security.route_policy import MIDENA_POLICY
 from fastapi import APIRouter
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
-from myf.security.route_policy import UNSAFE_METHODS, RouteSet, policy
+from mosp.security.route_policy import UNSAFE_METHODS, RouteSet, policy
 
 from tests.conftest import auth_client, peer_wrapper
 from tests.support import csrf

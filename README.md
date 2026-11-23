@@ -1,6 +1,6 @@
 # MIDENA
 
-MIDENA is the Mapping, Integration, Diagram Editing and Navigation Application: a diagram workspace for BPMN process models, Mermaid flowcharts and Mermaid sequence diagrams. It shares its stack and security model with KEEN and OSPMAE through the myf framework: FastAPI, PostgreSQL, Valkey and Celery behind nginx, with static pages built on the MOSP Design System.
+MIDENA is the Mapping, Integration, Diagram Editing and Navigation Application: a diagram workspace for BPMN process models, Mermaid flowcharts and Mermaid sequence diagrams. It shares its stack and security model with KEEN and OSPMAE through the MOSP framework: FastAPI, PostgreSQL, Valkey and Celery behind nginx, with static pages built on the MOSP Design System.
 
 ## Capabilities
 

@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from app.api.routes import diagrams
 from fastapi import HTTPException
-from myf.security.svg import sanitise_svg
+from mosp.security.svg import sanitise_svg
 
 from tests.conftest import auth_client
 from tests.support import SVG, csrf, make_diagram, make_flowchart, ok

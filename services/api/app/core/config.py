@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from urllib.parse import urlsplit
 
-from myf.config import MyfSettings
+from mosp.config import MospSettings
 from pydantic import Field, field_validator
 from pydantic_settings import SettingsConfigDict
 
 
-class Settings(MyfSettings):
-    """MIDENA's settings: myf's (myf.config.MyfSettings) and MIDENA's own."""
+class Settings(MospSettings):
+    """MIDENA's settings: mosp's (mosp.config.MospSettings) and MIDENA's own."""
 
     model_config = SettingsConfigDict(
         env_prefix="MIDENA_",
@@ -17,7 +17,7 @@ class Settings(MyfSettings):
         extra="ignore",
     )
 
-    # MIDENA's names and defaults for settings myf defines.
+    # MIDENA's names and defaults for settings mosp defines.
     session_cookie_name: str = Field(default="midena_session")
     session_ttl_seconds: int = Field(default=60 * 60 * 12)
     csrf_cookie_name: str = Field(default="midena_csrf")

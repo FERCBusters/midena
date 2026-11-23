@@ -154,7 +154,7 @@ def test_source_and_svg_come_from_the_saved_version_not_the_request(client, driv
 def test_reading_a_diagram_is_needed_to_export_it(client, drive):
     from app.db.models import Permission, User
     from app.db.session import SessionLocal
-    from myf.security.permissions import bump_authz_versions
+    from mosp.security.permissions import bump_authz_versions
 
     owner, _ = auth_client(role="contributor")
     other, other_user = auth_client(role="viewer")

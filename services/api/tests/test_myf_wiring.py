@@ -1,7 +1,7 @@
-"""MIDENA assembled on myf: the sign-in, session, CSRF, socket and request
-rules myf provides apply to MIDENA's own routes and settings.
+"""MIDENA assembled on mosp: the sign-in, session, CSRF, socket and request
+rules mosp provides apply to MIDENA's own routes and settings.
 
-myf's own suite covers those rules in depth; these tests check that MIDENA
+mosp's own suite covers those rules in depth; these tests check that MIDENA
 mounts them, and the few things MIDENA adds (its body limits, its mail
 outbox, its example environment).
 """
@@ -14,17 +14,17 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
-from app import myf_hooks
+from app import mosp_hooks
 from app.core.config import settings
 from app.db.models import Notification, UserShortcut
 from app.db.session import SessionLocal
 from app.services import notifications
 from fastapi.testclient import TestClient
-from myf.core.datetime_utils import utc_now_naive
-from myf.host import hooks
-from myf.realtime import sockets
-from myf.realtime.notifications import notification_hub
-from myf.security.auth import cookie_name
+from mosp.core.datetime_utils import utc_now_naive
+from mosp.host import hooks
+from mosp.realtime import sockets
+from mosp.realtime.notifications import notification_hub
+from mosp.security.auth import cookie_name
 from starlette.websockets import WebSocketDisconnect
 
 from tests.conftest import auth_client, generated_password, make_user, peer_wrapper
@@ -129,13 +129,13 @@ def test_body_limits_by_route():
     assert hooks.body_limit("/v1/auth/login") == 16 * 1024
     assert hooks.body_limit("/v1/me/password") == 16 * 1024
     assert hooks.body_limit("/v1/auth/mfa/webauthn/register") == 256 * 1024
-    assert hooks.body_limit("/v1/folders") == myf_hooks.MAX_BODY
-    assert hooks.body_limit("/v1/diagrams") == myf_hooks.MAX_DIAGRAM_BODY
-    assert hooks.body_limit("/v1/diagrams/x/save") == myf_hooks.MAX_DIAGRAM_BODY
-    assert hooks.body_limit("/v1/diagrams/x/comments") == myf_hooks.MAX_BODY
+    assert hooks.body_limit("/v1/folders") == mosp_hooks.MAX_BODY
+    assert hooks.body_limit("/v1/diagrams") == mosp_hooks.MAX_DIAGRAM_BODY
+    assert hooks.body_limit("/v1/diagrams/x/save") == mosp_hooks.MAX_DIAGRAM_BODY
+    assert hooks.body_limit("/v1/diagrams/x/comments") == mosp_hooks.MAX_BODY
     assert (
         hooks.body_limit("/v1/diagrams/x/export/google-drive")
-        == myf_hooks.MAX_DRIVE_EXPORT_BODY
+        == mosp_hooks.MAX_DRIVE_EXPORT_BODY
     )
 
 
@@ -179,7 +179,7 @@ def test_signed_in_writes_need_the_origin_and_the_sessions_token():
     ok(c.post("/v1/me/shortcuts", json=body, headers=csrf(c)))
 
 
-def test_the_account_changes_its_own_password_through_myf():
+def test_the_account_changes_its_own_password_through_mosp():
     password = generated_password()
     c, user = auth_client(role="viewer", password=password)
     changed = c.post(
@@ -236,7 +236,7 @@ def test_an_open_socket_ends_when_its_session_does(monkeypatch, valkey):
 
 def test_a_provider_starts_where_nginx_serves_the_api(monkeypatch):
     # nginx serves the API under /api/, as KEEN's does.
-    from myf.security import oidc
+    from mosp.security import oidc
 
     monkeypatch.setattr(settings, "oidc_enabled", True)
     provider = oidc.get_sso_provider("oidc")

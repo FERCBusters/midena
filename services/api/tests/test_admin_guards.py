@@ -128,7 +128,7 @@ def _direct_and_inheriting_admins():
 
 
 def _admins(db) -> int:
-    from myf.security.roles import count_effective_admins
+    from mosp.security.roles import count_effective_admins
 
     db.expire_all()
     return count_effective_admins(db)
@@ -208,7 +208,7 @@ def test_two_demotions_at_once_cannot_both_pass(db):
     import threading
 
     from app.db.session import SessionLocal
-    from myf.security.roles import lock_admin_changes
+    from mosp.security.roles import lock_admin_changes
 
     from tests.support import csrf, signed_in
 

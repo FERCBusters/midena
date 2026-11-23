@@ -1,11 +1,11 @@
-"""Where myf asks MIDENA to take part (myf.host.hooks).
+"""Where mosp asks MIDENA to take part (mosp.host.hooks).
 
-Every hook left out here keeps myf's default.
+Every hook left out here keeps mosp's default.
 """
 
 from __future__ import annotations
 
-from myf.security.regex import scan_pattern
+from mosp.security.regex import scan_pattern
 
 # Most MIDENA writes are small JSON forms.
 MAX_BODY = 2 * 1024 * 1024

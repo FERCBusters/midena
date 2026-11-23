@@ -3,8 +3,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from myf.core.datetime_utils import utc_now_naive
-from myf.db.accounts import (
+from mosp.core.datetime_utils import utc_now_naive
+from mosp.db.accounts import (
     AuditLogMixin,
     GroupMixin,
     MfaChallengeMixin,
@@ -36,7 +36,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.session import Base
 
 # -----------------------------------------------------------------------------
-# Accounts: myf's tables (myf.db.accounts) with MIDENA's additions
+# Accounts: mosp's tables (mosp.db.accounts) with MIDENA's additions
 # -----------------------------------------------------------------------------
 
 # Folder and Diagram have a column named uuid, which a class-level annotation
@@ -101,7 +101,7 @@ class SsoEmailChallenge(Base, SsoEmailChallengeMixin):
 
 
 class AuditLog(Base, AuditLogMixin):
-    """Requests recorded as the audit trail (myf.middleware). Semantic
+    """Requests recorded as the audit trail (mosp.middleware). Semantic
     before/after changes are stored separately in EntityChangelog."""
 
 

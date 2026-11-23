@@ -1,4 +1,4 @@
-"""Notification outbox dispatch: MIDENA's mail and myf's security notices.
+"""Notification outbox dispatch: MIDENA's mail and mosp's security notices.
 
 The beat schedule drains pending rows regularly; request paths kick an
 immediate best-effort dispatch so interactive mail (a verification link) is
@@ -18,8 +18,8 @@ log = get_task_logger(__name__)
 
 @celery_app.task(name="app.tasks.notifications.deliver_notifications")
 def deliver_notifications(limit: int = 10) -> dict:
-    """Drain MIDENA's outbox and myf's security notices."""
-    from myf.services import security_notifications
+    """Drain MIDENA's outbox and mosp's security notices."""
+    from mosp.services import security_notifications
 
     sent = 0
     for outbox in (notifications, security_notifications):

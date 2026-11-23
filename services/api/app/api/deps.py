@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Path, Query, Request
-from myf.security.roles import ROLE_ADMIN, attach_effective_role
+from mosp.security.roles import ROLE_ADMIN, attach_effective_role
 from sqlalchemy.orm import Session
 
 from app.db.models import User

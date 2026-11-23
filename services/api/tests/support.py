@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from app.db.models import Group, Permission, User, user_groups
 from app.db.session import SessionLocal
-from myf.security.permissions import bump_authz_versions
+from mosp.security.permissions import bump_authz_versions
 
 from tests.conftest import ROLE_PERMISSIONS, auth_client
 
@@ -52,7 +52,7 @@ def ok(response, status: int = 200):
 
 
 def make_group(name: str, *, role: str | None = None, members=()):
-    """A group with myf's role (admin or normal), or one of MIDENA's former
+    """A group with mosp's role (admin or normal), or one of MIDENA's former
     role names given as the permissions it held."""
     codes = ROLE_PERMISSIONS.get(role or "", ())
     if role in ROLE_PERMISSIONS:

@@ -1,6 +1,6 @@
-"""myf's request screening in front of MIDENA's own routes.
+"""mosp's request screening in front of MIDENA's own routes.
 
-myf's suite covers the screening itself; these check that MIDENA's routes sit
+mosp's suite covers the screening itself; these check that MIDENA's routes sit
 behind it and that MIDENA's validation handler does not echo what was sent.
 """
 
@@ -31,7 +31,7 @@ def test_an_oversized_write_changes_nothing():
 
 
 def test_a_nul_character_is_stored_as_a_replacement():
-    """PostgreSQL text cannot hold NUL: myf's routes read it as U+FFFD."""
+    """PostgreSQL text cannot hold NUL: mosp's routes read it as U+FFFD."""
     c, _ = auth_client(role="admin")
     response = c.post(
         "/v1/folders",

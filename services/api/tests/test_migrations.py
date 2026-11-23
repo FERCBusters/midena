@@ -100,7 +100,7 @@ def test_the_check_detects_a_revision_built_from_the_models():
 def test_existing_accounts_get_their_usernames_login_key():
     import uuid
 
-    from myf.security.names import login_key
+    from mosp.security.names import login_key
 
     _empty_database()
     try:

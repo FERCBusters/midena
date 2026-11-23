@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from myf.api.routing import Router
+from mosp.api.routing import Router
 
 from app.api.routes import admin, diagrams, me, system
 

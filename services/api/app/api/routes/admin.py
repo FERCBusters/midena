@@ -5,25 +5,25 @@ import uuid
 from typing import Annotated, Any
 
 from fastapi import Body, Depends, HTTPException, Query, Request
-from myf.api.routing import Router
-from myf.core.email_address import single_mailbox
-from myf.security.auth import create_user
-from myf.security.client_ip import request_ip
-from myf.security.passwords import hash_password
-from myf.security.permissions import (
+from mosp.api.routing import Router
+from mosp.core.email_address import single_mailbox
+from mosp.security.auth import create_user
+from mosp.security.client_ip import request_ip
+from mosp.security.passwords import hash_password
+from mosp.security.permissions import (
     bump_authz_versions,
     group_member_ids,
     has_permission,
 )
-from myf.security.roles import (
+from mosp.security.roles import (
     attach_effective_role,
     count_effective_admins,
     lock_admin_changes,
     normalize_role,
 )
-from myf.services import security_notifications
-from myf.services.account import end_password_recognition
-from myf.services.login import sign_in_key
+from mosp.services import security_notifications
+from mosp.services.account import end_password_recognition
+from mosp.services.login import sign_in_key
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
@@ -623,7 +623,7 @@ def admin_notifications(
     db: Session = Depends(get_db),
 ):
     """Both mail outboxes, newest first: share notices (MIDENA's) and account
-    security notices (myf's), with each message's delivery state and failure."""
+    security notices (mosp's), with each message's delivery state and failure."""
     from app.db.models import Notification, SecurityNotification
 
     limit = max(1, min(int(limit or 50), 200))

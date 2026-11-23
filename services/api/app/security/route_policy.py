@@ -1,8 +1,8 @@
-"""MIDENA's routes in myf's route policy (myf.security.route_policy).
+"""MIDENA's routes in mosp's route policy (mosp.security.route_policy).
 
-myf declares its own routes (signing in and out, second factors, single
+mosp declares its own routes (signing in and out, second factors, single
 sign-on, the account's own password and SSO addresses); this module declares
-MIDENA's, and myf applies the two together. MIDENA closes every write it does
+MIDENA's, and mosp applies the two together. MIDENA closes every write it does
 not declare (``refuse_undeclared_writes``): a route added without a decision
 about who may call it is refused for everyone, administrators included.
 
@@ -24,8 +24,8 @@ names a route that does not exist.
 
 from __future__ import annotations
 
-from myf.security.regex import scan_pattern
-from myf.security.route_policy import RouteCodes, RoutePolicy, RouteSet
+from mosp.security.regex import scan_pattern
+from mosp.security.route_policy import RouteCodes, RoutePolicy, RouteSet
 
 from app.security.permissions import (
     PERM_DIAGRAM_COMMENT,

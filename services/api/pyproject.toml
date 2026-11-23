@@ -7,7 +7,7 @@ package-mode = false
 
 [tool.poetry.dependencies]
 python = "^3.12"
-myf = { git = "https://github.com/FERCBusters/myf.git", rev = "6f821f5f8edb76274bc5d60a8c6330447ee282af" }
+mosp = { git = "https://github.com/FERCBusters/mosp.git", rev = "6f821f5f8edb76274bc5d60a8c6330447ee282af" }
 fastapi = "*"
 uvicorn = {version = "^0.53.0", extras = ["standard"]}
 SQLAlchemy = "^2.0.47"
