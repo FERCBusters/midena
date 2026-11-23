@@ -1,5 +1,10 @@
 # MIDENA
 
+[![Backend coverage](https://github.com/FERCBusters/midena/raw/badges/coverage-api.svg)](https://github.com/FERCBusters/midena/actions/workflows/tests.yml?query=branch%3Amain)
+[![Frontend coverage](https://github.com/FERCBusters/midena/raw/badges/coverage-ui.svg)](https://github.com/FERCBusters/midena/actions/workflows/tests.yml?query=branch%3Amain)
+[![mypy](https://github.com/FERCBusters/midena/raw/badges/mypy.svg)](https://github.com/FERCBusters/midena/actions/workflows/tests.yml?query=branch%3Amain)
+[![ruff](https://github.com/FERCBusters/midena/raw/badges/ruff.svg)](https://github.com/FERCBusters/midena/actions/workflows/tests.yml?query=branch%3Amain)
+
 MIDENA is the Mapping, Integration, Diagram Editing and Navigation Application: a diagram workspace for BPMN process models, Mermaid flowcharts and Mermaid sequence diagrams. It shares its stack and security model with KEEN and OSPMAE through the MOSP framework: FastAPI, PostgreSQL, Valkey and Celery behind nginx, with static pages built on the MOSP Design System.
 
 ## Capabilities
