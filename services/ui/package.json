@@ -9,10 +9,10 @@
     "bpmn-js": "18.19.0",
     "html2canvas": "1.4.1",
     "jspdf": "4.2.1",
-    "mermaid": "11.17.2"
+    "mermaid": "12.3.0"
   },
   "devDependencies": {
-    "esbuild": "0.28.0"
+    "esbuild": "0.28.1"
   },
   "scripts": {
     "vendor": "node scripts/vendor-assets.mjs",
