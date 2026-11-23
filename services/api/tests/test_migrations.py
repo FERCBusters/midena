@@ -95,3 +95,35 @@ def test_the_check_detects_a_revision_built_from_the_models():
     )
     assert _calls_create_all(tree)
     assert _imports_models(tree)
+
+
+def test_existing_accounts_get_their_usernames_login_key():
+    import uuid
+
+    from myf.security.names import login_key
+
+    _empty_database()
+    try:
+        command.upgrade(_config(), "0001_initial")
+        names = ("Alice", "ｂｏｂ")
+        with engine.begin() as conn:
+            for name in names:
+                conn.execute(
+                    text(
+                        "INSERT INTO users (id, username, password_hash, role,"
+                        " is_active, created_at, updated_at, authz_version)"
+                        " VALUES (:id, :name, 'unused', 'normal', true, now(),"
+                        " now(), 0)"
+                    ),
+                    {"id": uuid.uuid4(), "name": name},
+                )
+        command.upgrade(_config(), "0002_user_login_keys")
+        with engine.connect() as conn:
+            keys = dict(
+                conn.execute(text("SELECT username, login_key FROM users")).all()
+            )
+        assert keys == {name: login_key(name) for name in names}
+        assert keys["ｂｏｂ"] == login_key("BOB")
+    finally:
+        _empty_database()
+        Base.metadata.create_all(engine)
