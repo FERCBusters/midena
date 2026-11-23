@@ -1,9 +1,29 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+from fastapi import Body, Depends, HTTPException, Query, Request
+from myf.api.routing import Router
+from myf.core.email_address import single_mailbox
+from myf.security.auth import create_user
+from myf.security.client_ip import request_ip
+from myf.security.passwords import hash_password
+from myf.security.permissions import (
+    bump_authz_versions,
+    group_member_ids,
+    has_permission,
+)
+from myf.security.roles import (
+    attach_effective_role,
+    count_effective_admins,
+    lock_admin_changes,
+    normalize_role,
+)
+from myf.services import security_notifications
+from myf.services.account import end_password_recognition
+from myf.services.login import sign_in_key
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
@@ -25,33 +45,19 @@ from app.api.payloads import (
     AdminUserUpdatePayload,
     GlobalDiagramChromePayload,
 )
-from app.core.email_address import single_mailbox
 from app.db.models import (
     AuditLog,
     Diagram,
     DiagramLock,
     GlobalDiagramChrome,
     Group,
-    GroupPermission,
-    LoginDevice,
     Permission,
     User,
-    UserGroup,
-    UserPermission,
+    group_permissions,
+    user_groups,
 )
 from app.db.session import get_db
-from app.security import sign_in_throttle as throttle
-from app.security.auth import create_user, get_password_hash, get_user_by_email
-from app.security.client_addr import request_client_address
-from app.security.permissions import PERM_AUDITTRAIL_READ, has_permission
-from app.security.roles import (
-    active_admin_count,
-    attach_effective_role,
-    lock_admin_changes,
-    normalize_role,
-)
-from app.security.sessions import end_all_sessions
-from app.services import security_notifications
+from app.security.permissions import PERM_AUDITTRAIL_READ
 from app.services.diagram_theme import normalise_diagram_theme
 from app.services.entity_changelog import (
     CHANGELOG_ENTITY_TYPES,
@@ -62,13 +68,14 @@ from app.tasks.notifications import kick_delivery
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = Router()
 
 
 def _ensure_an_admin_remains(db: Session, detail: str) -> None:
     """Refuse a pending change that leaves no active administrator, counting
     accounts that hold the role through a group as well as directly."""
-    if active_admin_count(db) == 0:
+    db.flush()
+    if count_effective_admins(db) == 0:
         db.rollback()
         raise HTTPException(status_code=409, detail=detail)
 
@@ -84,7 +91,7 @@ def require_audit_access(
 
 def _group_to_dict(g: Group) -> dict:
     return {
-        "id": g.id,
+        "id": str(g.id),
         "name": g.name,
         "description": g.description,
         "role": g.role,
@@ -93,7 +100,7 @@ def _group_to_dict(g: Group) -> dict:
 
 def _permission_to_dict(p: Permission) -> dict:
     return {
-        "id": p.id,
+        "id": str(p.id),
         "code": p.code,
         "description": p.description,
     }
@@ -110,7 +117,7 @@ def list_users(
         eff = attach_effective_role(db, u)
         out.append(
             {
-                "id": u.id,
+                "id": str(u.id),
                 "username": u.username,
                 "email": getattr(u, "email", None),
                 "role": u.role,
@@ -124,55 +131,62 @@ def list_users(
     return {"items": out}
 
 
+def _user_to_dict(db: Session, u: User) -> dict:
+    return {
+        "id": str(u.id),
+        "username": u.username,
+        "email": u.email,
+        "role": u.role,
+        "effective_role": attach_effective_role(db, u),
+        "is_active": u.is_active,
+    }
+
+
+def _find(db: Session, model, row_id: uuid.UUID, detail: str):
+    row = db.get(model, row_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=detail)
+    return row
+
+
+def _end_sessions(user: User) -> None:
+    """End every session of the account: the enrolment version moves on, so
+    its sessions, pending ceremonies and address proofs end for good."""
+    user.mfa_version += 1
+
+
 @router.post("/v1/admin/users")
 def create_user_route(
     payload: AdminUserCreatePayload,
     _: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
+    email = None
+    if payload.email and payload.email.strip():
+        email = single_mailbox(payload.email)
+        if email is None:
+            raise HTTPException(status_code=400, detail="Invalid email address")
     try:
         u = create_user(
             db,
             username=payload.username,
             password=payload.password,
-            email=payload.email,
+            email=email,
             role=payload.role,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-
-    eff = attach_effective_role(db, u)
-    return {
-        "id": u.id,
-        "username": u.username,
-        "email": getattr(u, "email", None),
-        "role": u.role,
-        "effective_role": eff,
-        "is_active": u.is_active,
-    }
+    return _user_to_dict(db, u)
 
 
 @router.patch("/v1/admin/users/{user_id}")
 def update_user_route(
-    user_id: DbId,
+    user_id: uuid.UUID,
     payload: AdminUserUpdatePayload,
     me: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    u = db.query(User).filter(User.id == user_id).one_or_none()
-    if not u:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    new_role = u.role
-    if payload.role is not None:
-        nr = normalize_role(payload.role)
-        if nr is None:
-            raise HTTPException(status_code=400, detail="Invalid role")
-        new_role = nr
-
-    new_is_active = (
-        u.is_active if payload.is_active is None else bool(payload.is_active)
-    )
+    u = _find(db, User, user_id, "User not found")
     if u.id == me.id and payload.is_active is False:
         raise HTTPException(
             status_code=400, detail="You cannot deactivate your own account"
@@ -188,42 +202,29 @@ def update_user_route(
             email = single_mailbox(payload.email)
             if email is None:
                 raise HTTPException(status_code=400, detail="Invalid email address")
-            email = email.lower()
-            other = get_user_by_email(db, email)
-            if other is not None and other.id != u.id:
-                raise HTTPException(status_code=400, detail="Email already in use")
         u.email = email
 
-    if payload.role is not None:
-        u.role = new_role
+    if payload.role is not None and payload.role != u.role:
+        u.role = payload.role
+        bump_authz_versions(db, [u.id])
     if payload.is_active is False and u.is_active:
         # As in KEEN, deactivation ends the account's sessions for good: they
-        # do not return if the account is activated again, and the enrolment
-        # version moves on so pending ceremonies and address proofs end too.
-        end_all_sessions(db, u)
+        # do not return if the account is activated again.
+        _end_sessions(u)
     if payload.is_active is not None:
-        u.is_active = new_is_active
+        u.is_active = bool(payload.is_active)
 
-    db.add(u)
     _ensure_an_admin_remains(
         db, "Cannot demote or deactivate the last active admin user"
     )
     db.commit()
     db.refresh(u)
-    eff = attach_effective_role(db, u)
-    return {
-        "id": u.id,
-        "username": u.username,
-        "email": getattr(u, "email", None),
-        "role": u.role,
-        "effective_role": eff,
-        "is_active": u.is_active,
-    }
+    return _user_to_dict(db, u)
 
 
 @router.post("/v1/admin/users/{user_id}/password")
 def set_user_password_route(
-    user_id: DbId,
+    user_id: uuid.UUID,
     payload: AdminSetPasswordPayload,
     request: Request,
     _: User = Depends(require_admin),
@@ -244,7 +245,7 @@ def set_user_password_route(
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
     try:
-        target.password_hash = get_password_hash(
+        target.password_hash = hash_password(
             payload.new_password, username=target.username
         )
     except ValueError as problem:
@@ -252,148 +253,95 @@ def set_user_password_route(
     # Every session ends, whichever way it was signed in: a reset answers a
     # suspected takeover, and a session opened through a provider is as much
     # part of one as a password session.
-    end_all_sessions(db, target)
-    db.query(LoginDevice).filter(LoginDevice.user_id == target.id).delete(
-        synchronize_session=False
-    )
-    throttle.clear_throttle(db, throttle.name_key(target.username))
-    notice_queued = security_notifications.enqueue(
-        db, target, "password-reset", ip=request_client_address(request)
-    )
-    db.add(target)
+    _end_sessions(target)
+    key = sign_in_key(db, target.username)
+    security_notifications.enqueue(db, target, "password-reset", ip=request_ip(request))
     db.commit()
-    if notice_queued:
-        kick_delivery()
+    end_password_recognition(str(target.id), key=key)
+    # Sends the notice now when mail is configured; the beat schedule
+    # delivers it otherwise.
+    kick_delivery()
     return {"ok": True}
 
 
 @router.delete("/v1/admin/users/{user_id}")
 def delete_user_route(
-    user_id: DbId,
+    user_id: uuid.UUID,
     me: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """Hard-delete a user.
 
-    Notes:
-      - Cascades will remove sessions, shortcuts, preferences, group links, etc.
-      - Diagrams, versions and folders keep their rows; their author columns
-        are set to NULL.
+    Cascades remove shortcuts, preferences, group links and the rest;
+    diagrams, versions and folders keep their rows with their author columns
+    set to NULL.
     """
-    if int(user_id) == int(me.id):
+    if user_id == me.id:
         raise HTTPException(status_code=400, detail="You cannot delete your own user")
-
-    u = db.query(User).filter(User.id == user_id).one_or_none()
-    if not u:
-        raise HTTPException(status_code=404, detail="User not found")
+    u = _find(db, User, user_id, "User not found")
 
     # Safety: don't allow deleting the last active admin.
     lock_admin_changes(db)
     db.delete(u)
     _ensure_an_admin_remains(db, "Cannot delete the last active admin user")
     db.commit()
-    return {"status": "ok", "deleted_user_id": user_id}
+    return {"status": "ok", "deleted_user_id": str(user_id)}
 
 
 @router.get("/v1/admin/users/{user_id}/access")
 def get_user_access(
-    user_id: DbId,
+    user_id: uuid.UUID,
     _: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    u = db.query(User).filter(User.id == user_id).one_or_none()
-    if not u:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    group_ids = [
-        gid
-        for (gid,) in db.query(UserGroup.group_id)
-        .filter(UserGroup.user_id == user_id)
-        .all()
-    ]
-    permission_ids = [
-        pid
-        for (pid,) in db.query(UserPermission.permission_id)
-        .filter(UserPermission.user_id == user_id)
-        .all()
-    ]
-
+    u = _find(db, User, user_id, "User not found")
     groups = db.query(Group).order_by(Group.name.asc()).all()
     perms = db.query(Permission).order_by(Permission.code.asc()).all()
-
     return {
-        "user_id": user_id,
-        "group_ids": group_ids,
-        "permission_ids": permission_ids,
+        "user_id": str(u.id),
+        "group_ids": sorted(str(g.id) for g in u.groups),
+        "permission_ids": sorted(str(p.id) for p in u.permissions),
         "available_groups": [_group_to_dict(g) for g in groups],
         "available_permissions": [_permission_to_dict(p) for p in perms],
     }
 
 
+def _rows(db: Session, model, ids: list[uuid.UUID], detail: str) -> list:
+    rows = db.query(model).filter(model.id.in_(ids)).all() if ids else []
+    if len(rows) != len(ids):
+        raise HTTPException(status_code=400, detail=detail)
+    return rows
+
+
 @router.put("/v1/admin/users/{user_id}/access")
 def set_user_access(
-    user_id: DbId,
+    user_id: uuid.UUID,
     body: AdminUserAccessUpdatePayload,
     _: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    u = db.query(User).filter(User.id == user_id).one_or_none()
-    if not u:
-        raise HTTPException(status_code=404, detail="User not found")
-
+    u = _find(db, User, user_id, "User not found")
     group_ids = sorted(set(body.group_ids))
     permission_ids = sorted(set(body.permission_ids))
 
     # Safety: stripping the last active admin's own access would lock the
     # installation out; refuse the change and ask for another admin.
     lock_admin_changes(db)
-    if (
-        (u.role or "").lower() == "admin"
-        and bool(u.is_active)
-        and not permission_ids
-        and not group_ids
-    ):
-        if active_admin_count(db) <= 1:
-            raise HTTPException(
-                status_code=409,
-                detail="Cannot strip access from the last active admin user",
-            )
-
-    if group_ids:
-        existing_groups = db.query(Group.id).filter(Group.id.in_(group_ids)).count()
-        if existing_groups != len(group_ids):
-            raise HTTPException(
-                status_code=400, detail="one or more group_ids are invalid"
-            )
-
-    if permission_ids:
-        existing_perms = (
-            db.query(Permission.id).filter(Permission.id.in_(permission_ids)).count()
-        )
-        if existing_perms != len(permission_ids):
-            raise HTTPException(
-                status_code=400, detail="one or more permission_ids are invalid"
-            )
-
-    db.query(UserGroup).filter(UserGroup.user_id == user_id).delete()
-    db.query(UserPermission).filter(UserPermission.user_id == user_id).delete()
-
-    for gid in group_ids:
-        db.add(UserGroup(user_id=user_id, group_id=gid))
-    for pid in permission_ids:
-        db.add(UserPermission(user_id=user_id, permission_id=pid))
+    u.groups = _rows(db, Group, group_ids, "one or more group_ids are invalid")
+    u.permissions = _rows(
+        db, Permission, permission_ids, "one or more permission_ids are invalid"
+    )
+    bump_authz_versions(db, [u.id])
 
     # An account that is an administrator through a group stays one, or
     # another administrator exists.
     _ensure_an_admin_remains(db, "Cannot strip access from the last active admin user")
     db.commit()
-    db.refresh(u)
-
     return {
         "status": "ok",
-        "user_id": user_id,
-        "group_ids": group_ids,
-        "permission_ids": permission_ids,
+        "user_id": str(u.id),
+        "group_ids": [str(g) for g in group_ids],
+        "permission_ids": [str(p) for p in permission_ids],
     }
 
 
@@ -402,27 +350,28 @@ def list_groups(
     _: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    items = db.query(Group).order_by(Group.name.asc()).all()
-
     out = []
-    for g in items:
-        # Count rows rather than a specific column to avoid schema drift issues
-        # (e.g. older databases where the join table may not have a populated id).
-        members = db.query(UserGroup).filter(UserGroup.group_id == g.id).count()
+    for g in db.query(Group).order_by(Group.name.asc()).all():
+        members = db.query(user_groups).filter(user_groups.c.group_id == g.id).count()
         perms = (
-            db.query(GroupPermission.id)
-            .filter(GroupPermission.group_id == g.id)
+            db.query(group_permissions)
+            .filter(group_permissions.c.group_id == g.id)
             .count()
         )
         out.append(
-            {
-                **_group_to_dict(g),
-                "member_count": members,
-                "permission_count": perms,
-            }
+            {**_group_to_dict(g), "member_count": members, "permission_count": perms}
         )
-
     return {"items": out}
+
+
+def _group_role(raw) -> str | None:
+    """A group's role: admin or normal, or none."""
+    if raw is None or str(raw).strip() == "":
+        return None
+    role = normalize_role(str(raw))
+    if role not in ("admin", "normal"):
+        raise HTTPException(status_code=400, detail="invalid role")
+    return role
 
 
 @router.post("/v1/admin/groups")
@@ -434,15 +383,9 @@ def create_group(
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="name is required")
-
-    role = normalize_role(body.role) if body.role is not None else None
-    if body.role is not None and role is None:
-        raise HTTPException(status_code=400, detail="invalid role")
-
-    existing = db.query(Group).filter(Group.name == name).one_or_none()
-    if existing:
+    role = _group_role(body.role)
+    if db.query(Group).filter(Group.name == name).one_or_none():
         raise HTTPException(status_code=409, detail="group exists")
-
     g = Group(
         name=name,
         description=(body.description or "").strip() or None,
@@ -451,21 +394,17 @@ def create_group(
     db.add(g)
     db.commit()
     db.refresh(g)
-
     return _group_to_dict(g)
 
 
 @router.patch("/v1/admin/groups/{group_id}")
 def update_group(
-    group_id: DbId,
+    group_id: uuid.UUID,
     payload: AdminGroupUpdatePayload,
     _: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    g = db.query(Group).filter(Group.id == group_id).one_or_none()
-    if not g:
-        raise HTTPException(status_code=404, detail="group not found")
-
+    g = _find(db, Group, group_id, "group not found")
     body = payload.model_dump(exclude_unset=True)
 
     if "name" in body:
@@ -485,18 +424,9 @@ def update_group(
         g.description = (body.get("description") or "").strip() or None
 
     if "role" in body:
-        raw_role = body.get("role")
-        if raw_role is None or str(raw_role).strip() == "":
-            g.role = None
-        else:
-            nr = normalize_role(str(raw_role))
-            if nr is None:
-                raise HTTPException(status_code=400, detail="invalid role")
-            g.role = nr
-
-    db.add(g)
-    if "role" in body:
         lock_admin_changes(db)
+        g.role = _group_role(body.get("role"))
+        bump_authz_versions(db, group_member_ids(db, g.id))
         _ensure_an_admin_remains(db, "This group gives the last active admin its role")
     db.commit()
     db.refresh(g)
@@ -505,78 +435,55 @@ def update_group(
 
 @router.delete("/v1/admin/groups/{group_id}")
 def delete_group(
-    group_id: DbId,
+    group_id: uuid.UUID,
     _: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """Hard-delete a group.
-
-    Cascades remove membership links and group permissions.
-    """
-    g = db.query(Group).filter(Group.id == group_id).one_or_none()
-    if not g:
-        raise HTTPException(status_code=404, detail="group not found")
-
+    """Hard-delete a group. Cascades remove membership links and group
+    permissions."""
+    g = _find(db, Group, group_id, "group not found")
     lock_admin_changes(db)
+    bump_authz_versions(db, group_member_ids(db, g.id))
     db.delete(g)
     _ensure_an_admin_remains(db, "This group gives the last active admin its role")
     db.commit()
-    return {"status": "ok", "deleted_group_id": group_id}
+    return {"status": "ok", "deleted_group_id": str(group_id)}
 
 
 @router.get("/v1/admin/groups/{group_id}/permissions")
 def get_group_permissions(
-    group_id: DbId,
+    group_id: uuid.UUID,
     _: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    g = db.query(Group).filter(Group.id == group_id).one_or_none()
-    if not g:
-        raise HTTPException(status_code=404, detail="group not found")
-
-    permission_ids = [
-        pid
-        for (pid,) in db.query(GroupPermission.permission_id)
-        .filter(GroupPermission.group_id == group_id)
-        .all()
-    ]
+    g = _find(db, Group, group_id, "group not found")
     perms = db.query(Permission).order_by(Permission.code.asc()).all()
-
     return {
-        "group_id": group_id,
-        "permission_ids": permission_ids,
+        "group_id": str(g.id),
+        "permission_ids": sorted(str(p.id) for p in g.permissions),
         "available_permissions": [_permission_to_dict(p) for p in perms],
     }
 
 
 @router.put("/v1/admin/groups/{group_id}/permissions")
 def set_group_permissions(
-    group_id: DbId,
+    group_id: uuid.UUID,
     body: AdminGroupPermissionsUpdatePayload,
     _: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    g = db.query(Group).filter(Group.id == group_id).one_or_none()
-    if not g:
-        raise HTTPException(status_code=404, detail="group not found")
-
+    g = _find(db, Group, group_id, "group not found")
     permission_ids = sorted(set(body.permission_ids))
-
-    if permission_ids:
-        existing_perms = (
-            db.query(Permission.id).filter(Permission.id.in_(permission_ids)).count()
-        )
-        if existing_perms != len(permission_ids):
-            raise HTTPException(
-                status_code=400, detail="one or more permission_ids are invalid"
-            )
-
-    db.query(GroupPermission).filter(GroupPermission.group_id == group_id).delete()
-    for pid in permission_ids:
-        db.add(GroupPermission(group_id=group_id, permission_id=pid))
+    g.permissions = _rows(
+        db, Permission, permission_ids, "one or more permission_ids are invalid"
+    )
+    bump_authz_versions(db, group_member_ids(db, g.id))
     db.commit()
-
-    return {"status": "ok", "group_id": group_id, "permission_ids": permission_ids}
+    return {
+        "status": "ok",
+        "group_id": str(g.id),
+        "permission_ids": [str(p) for p in permission_ids],
+    }
 
 
 @router.get("/v1/admin/permissions")
@@ -590,28 +497,19 @@ def list_permissions(
 
 @router.post("/v1/admin/users/{user_id}/permissions/{permission_id}")
 def add_user_permission(
-    user_id: DbId,
-    permission_id: DbId,
+    user_id: uuid.UUID,
+    permission_id: uuid.UUID,
     _: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    u = db.query(User).filter(User.id == user_id).one_or_none()
-    p = db.query(Permission).filter(Permission.id == permission_id).one_or_none()
+    u = db.get(User, user_id)
+    p = db.get(Permission, permission_id)
     if not u or not p:
         raise HTTPException(status_code=404, detail="user or permission not found")
-
-    existing = (
-        db.query(UserPermission)
-        .filter(
-            UserPermission.user_id == user_id,
-            UserPermission.permission_id == permission_id,
-        )
-        .one_or_none()
-    )
-    if existing:
+    if p in u.permissions:
         return {"status": "ok", "already_linked": True}
-
-    db.add(UserPermission(user_id=user_id, permission_id=permission_id))
+    u.permissions.append(p)
+    bump_authz_versions(db, [u.id])
     db.commit()
     return {"status": "ok"}
 
@@ -698,12 +596,6 @@ def admin_entity_changelog(
     )
 
 
-def _pending_notification_count(db: Session) -> int:
-    from app.db.models import Notification
-
-    return db.query(Notification).filter(Notification.status == "pending").count()
-
-
 @router.get("/v1/admin/features")
 def admin_features(_: User = Depends(require_admin), db: Session = Depends(get_db)):
     """Installation feature switches with their stored and deployment settings."""
@@ -730,25 +622,39 @@ def admin_notifications(
     _: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """The e-mail outbox: every queued mail's delivery state and failure."""
-    from app.db.models import Notification
+    """Both mail outboxes, newest first: share notices (MIDENA's) and account
+    security notices (myf's), with each message's delivery state and failure."""
+    from app.db.models import Notification, SecurityNotification
 
     limit = max(1, min(int(limit or 50), 200))
-    rows = (
-        db.query(Notification)
-        .order_by(Notification.created_at.desc())
-        .limit(limit)
-        .all()
-    )
-    pending = db.query(Notification).filter(Notification.status == "pending").count()
-    failed = db.query(Notification).filter(Notification.status == "failed").count()
+    outboxes = (("share", Notification), ("security", SecurityNotification))
+    rows = sorted(
+        (
+            (kind, row)
+            for kind, model in outboxes
+            for row in db.query(model)
+            .order_by(model.created_at.desc())
+            .limit(limit)
+            .all()
+        ),
+        key=lambda item: item[1].created_at,
+        reverse=True,
+    )[:limit]
+
+    def counted(status: str) -> int:
+        return sum(
+            db.query(model).filter(model.status == status).count()
+            for _, model in outboxes
+        )
+
     return {
-        "pending": pending,
-        "failed": failed,
+        "pending": counted("pending"),
+        "failed": counted("failed"),
         "notifications": [
             {
                 "id": str(row.id),
-                "user_id": row.user_id,
+                "kind": kind,
+                "user_id": str(row.user_id) if row.user_id else None,
                 "recipient": row.recipient,
                 "subject": row.subject,
                 "status": row.status,
@@ -757,7 +663,7 @@ def admin_notifications(
                 "created_at": row.created_at,
                 "sent_at": row.sent_at,
             }
-            for row in rows
+            for kind, row in rows
         ],
     }
 

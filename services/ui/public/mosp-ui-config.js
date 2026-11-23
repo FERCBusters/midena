@@ -2,14 +2,16 @@
 (function () {
   function mapMe(me) {
     const role =
-      String(me?.effective_role || me?.role || "").toLowerCase() || "viewer";
+      String(me?.effective_role || me?.role || "").toLowerCase() || "normal";
     const isAdmin = role === "admin";
-    const canEdit =
-      isAdmin || ["maintainer", "contributor", "architect"].includes(role);
-    const canComment =
-      isAdmin || canEdit || ["engineer", "product_owner"].includes(role);
-    const canManageFolders =
-      isAdmin || ["maintainer", "architect", "diagram_admin"].includes(role);
+    // What an ordinary account may do comes from its permissions (the
+    // server's own checks decide; these only choose which links to show).
+    const permissions = new Set(
+      Array.isArray(me?.permissions) ? me.permissions : [],
+    );
+    const canEdit = isAdmin || permissions.has("diagram.write");
+    const canComment = canEdit || permissions.has("diagram.comment");
+    const canManageFolders = isAdmin || permissions.has("folder.manage");
     return {
       ...me,
       user: String(me?.user || me?.username || "").trim(),
@@ -27,9 +29,9 @@
     brandIcon: "/favicon.svg",
     brandHref: "/index.html",
     auth: {
-      meEndpoint: "/v1/me",
+      meEndpoint: "/api/v1/me",
       loginUrl: "/login.html",
-      logoutEndpoint: "/v1/auth/logout",
+      logoutEndpoint: "/api/v1/auth/logout",
       logoutRedirect: "/login.html",
       accountHref: "/account.html",
     },
@@ -64,7 +66,7 @@
     search: { enabled: false },
     shortcuts: {
       enabled: true,
-      endpoint: "/v1/me/shortcuts",
+      endpoint: "/api/v1/me/shortcuts",
       label: "Shortcuts",
     },
     bell: { enabled: false },
@@ -75,7 +77,7 @@
     // same value on pages that load without this config (sign-in).
     storage: { themeKey: "keen_theme" },
     uiPreferences: {
-      endpoint: "/v1/me/preferences",
+      endpoint: "/api/v1/me/preferences",
       method: "PUT",
       stickyField: "sticky_enabled",
     },

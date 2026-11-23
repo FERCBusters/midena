@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from myf.api.routing import Router
 
-from app.api.routes import admin, auth, diagrams, me, mfa, system
+from app.api.routes import admin, diagrams, me, system
 
-router = APIRouter()
+router = Router()
 
 router.include_router(system.router, tags=["system"])
-router.include_router(auth.router, tags=["auth"])
-router.include_router(mfa.router, tags=["auth"])
 router.include_router(me.router, tags=["me"])
 # Optional areas (public diagrams, AI generation, Google Drive export) are
 # gated route by route in diagrams.py with require_feature.

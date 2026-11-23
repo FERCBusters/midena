@@ -3,11 +3,11 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Path, Query, Request
+from myf.security.roles import ROLE_ADMIN, attach_effective_role
 from sqlalchemy.orm import Session
 
 from app.db.models import User
 from app.db.session import get_db
-from app.security.roles import ROLE_ADMIN, attach_effective_role
 
 
 def get_request_user(request: Request) -> User:

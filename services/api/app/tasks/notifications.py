@@ -1,4 +1,4 @@
-"""Notification outbox dispatch.
+"""Notification outbox dispatch: MIDENA's mail and myf's security notices.
 
 The beat schedule drains pending rows regularly; request paths kick an
 immediate best-effort dispatch so interactive mail (a verification link) is
@@ -18,11 +18,15 @@ log = get_task_logger(__name__)
 
 @celery_app.task(name="app.tasks.notifications.deliver_notifications")
 def deliver_notifications(limit: int = 10) -> dict:
-    try:
-        sent = notifications.deliver_pending(limit=limit)
-    except Exception:
-        log.exception("Notification dispatch failed")
-        return {"sent": 0, "error": "dispatch failed"}
+    """Drain MIDENA's outbox and myf's security notices."""
+    from myf.services import security_notifications
+
+    sent = 0
+    for outbox in (notifications, security_notifications):
+        try:
+            sent += outbox.deliver_pending(limit=limit)
+        except Exception:
+            log.exception("Notification dispatch failed")
     return {"sent": sent}
 
 

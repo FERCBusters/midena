@@ -3,37 +3,37 @@
 ## Scope and structure
 
 - Read the relevant code and tests before editing. Prefer small changes to the layer that owns the behaviour, using existing helpers and services.
-- Keep HTTP handlers focused on validation, authorisation and responses. Shared security boundaries live in `services/api/app/security/`; background work lives in `services/api/app/tasks/`; integrations live in `services/api/app/services/`. Feature switches live in `app/core/features.py` (administrator-managed, with `MIDENA_FEATURE_*` as the deployment ceiling; keep it aligned with KEEN's and OSPMAE's) and gate routes through `require_feature`.
-- MIDENA's security primitives come from KEEN and OSPMAE and are the candidates for the shared `myf` framework. Keep each one behaviourally identical to its origin unless MIDENA's version is stronger, and record a deliberate difference beside the code.
+- Keep HTTP handlers focused on validation, authorisation and responses. Signing in, sessions, second factors, single sign-on, CSRF, request limits, client addresses, the audit trail and the shared security primitives come from the `myf` framework (`FERCBusters/myf`, pinned in `services/api/pyproject.toml`), which KEEN and OSPMAE share; MIDENA binds to it in `app/__init__.py` and takes part through `app/myf_hooks.py`. MIDENA's own route policy and permissions live in `services/api/app/security/`; background work lives in `services/api/app/tasks/`; integrations live in `services/api/app/services/`. Feature switches live in `app/core/features.py` (administrator-managed, with `MIDENA_FEATURE_*` as the deployment ceiling; keep it aligned with KEEN's and OSPMAE's) and gate routes through `require_feature`.
+- A behaviour the three applications share belongs in myf, changed there for all of them; MIDENA keeps only what is its own. Where MIDENA needs something myf lacks, add it to myf (with myf's tests) rather than a local copy.
 - Use the design system and shared UI helpers (`@fercbusters/mosp-design-system`, pinned by commit in `services/ui/package.json` and vendored into `public/vendor/` by `scripts/vendor-assets.mjs`). Keep API authorisation authoritative even when the UI hides an action.
 - Remove code only after checking all callers, configuration references and runtime entry points. Do not introduce compatibility machinery without a concrete supported use case.
-- Before writing a helper, search for an existing one and reuse or extend it. Shared homes include:
-  - `security/route_policy.py`: `PUBLIC_ROUTES` and `WRITE_POLICY`, the rule for every served route; `audit_path` for paths that carry tokens.
-  - `security/client_addr.py`: `request_client_address` and `request_allowance_key` (an IPv6 /64 counts as one address).
-  - `security/url_safety.py`: `validate_safe_href` for stored links, `safe_relative_route_path` for redirects and stored paths.
-  - `security/xml.py`: `parse_untrusted_xml` for every XML document a user or upstream supplies.
-  - `security/svg.py`: `sanitise_svg` for every stored SVG.
-  - `security/sso_http.py`: `client_options` for every identity-provider request (bounded, uncompressed, no redirects, no proxy environment).
-  - `core/datetime_utils.py`: `utc_now_naive` for every stored timestamp.
-  - `security/rate_limit.py`: `take_rate_limit` for database-backed allowances; `security/local_allowance.py` for bounded in-memory ones.
-  - `security/request_limits.py`: body classes, JSON shape, request targets and cookie screening, shared with KEEN.
-  - `security/sessions.py` (`session_row`, `csrf_token_for`), `security/csrf.py` and `security/auth.session_cookie_name`: cookies are read and set under these names, never the bare settings.
+- Before writing a helper, search for an existing one in MIDENA and in myf, and reuse or extend it. Shared homes include:
+  - `app/security/route_policy.py`: `MIDENA_POLICY`, the rule for every MIDENA route, merged with myf's own (`myf.security.route_policy`); `audit_path` for paths that carry tokens.
+  - `app/security/permissions.py`: MIDENA's permission codes and their seed.
+  - `myf.security.client_ip`: `request_ip` (forwarded addresses through `MIDENA_SECURITY_TRUSTED_PROXY_CIDRS`); `myf.security.rate_limit`: `sliding_window_allow` for Valkey-backed allowances and `address_allowance` (an IPv6 /64 counts as one address).
+  - `myf.security.urls`: `external_url` for stored links, `same_site_path` for redirects and stored paths.
+  - `myf.security.xml`: `parse_untrusted_xml` for every XML document a user or upstream supplies; `myf.security.svg`: `sanitise_svg` for every stored SVG. MIDENA passes its 3 MiB bound (`MAX_XML_BYTES` in `diagrams.py`).
+  - `myf.security.sso_http`: `client_options` for every identity-provider request (bounded, uncompressed, no redirects, no proxy environment).
+  - `myf.core.datetime_utils`: `utc_now_naive` for every stored timestamp.
+  - `myf.security.request_limits` and `app/myf_hooks.body_limit`: body classes, request targets and cookie screening; `myf.api.routing.Router` for every router, so JSON bodies are decoded with myf's shape limits.
+  - `myf.security.sessions`, `myf.security.csrf` and `myf.security.auth.cookie_name`: cookies are read and set under these names, never the bare settings.
+  - `myf.security.permissions.bump_authz_versions`: after any change to an account's role, groups or permissions, so its sessions follow.
   - `api/deps.py`: `DbId`, `OptionalDbId`, `PageLimit`, `PageOffset` for every integer parameter.
   - `api/downloads.py`: `attachment_media_type` and `content_disposition_attachment` for every download.
-  - `security/audit.py` (`record_sign_in`), `tasks/maintenance.py` (retention sweeping), `services/entity_changelog.py` (semantic history).
-  - In the UI: `app.js` (`safeHref`, `escapeHtml`, `featureOn`/`gateFeature`, `formatDate`) and `rendered-diagram-interactions.js` (`svgNodeFromMarkup`, `safeLinkUrl`).
+  - `tasks/maintenance.py` (myf's `housekeeping` and `audit_retention` sweeps with MIDENA's locks), `services/entity_changelog.py` (semantic history), `services/notifications.py` (the share-notice outbox).
+  - In the UI: `app.js` (`safeHref`, `escapeHtml`, `featureOn`/`gateFeature`, `formatDate`, `logout`) and `rendered-diagram-interactions.js` (`svgNodeFromMarkup`, `safeLinkUrl`).
 - A second copy of a helper is a defect even when it starts out identical. Where a behaviour must be the same everywhere, give it one shared helper, route every caller through it, and add a contract test that refuses a hand-rolled copy and proves it would catch one.
 - Trust declared types. Read typed settings, ORM columns and values the code has just built directly. Keep guards where data is untrusted or genuinely optional: request payloads, diagram content, provider answers and nullable columns.
 - Every optional area honours its feature switch: routes answer 404 when it is off, and the UI hides it through `featureOn`/`gateFeature`.
 
 ## Security invariants
 
-- Every HTTP route enters the authentication, Origin, CSRF and audit middleware in `main.py`. A new route needs a rule in `security/route_policy.py` (the suite fails without one), an explicit permission or object check, and regression tests against the assembled application.
+- Every HTTP route enters myf's authentication, Origin, CSRF and audit middleware, installed in `main.py`. A new route needs a rule in `app/security/route_policy.py` (a write without one is refused for everyone, and the suite fails), an explicit permission or object check, and regression tests against the assembled application.
 - Diagram content is hostile wherever it appears. BPMN parses through `parse_untrusted_xml(strict=True)`; SVG is stored only after `sanitise_svg`; in the browser, SVG markup enters the page only through `svgNodeFromMarkup`, Mermaid runs with `securityLevel: 'strict'`, and links pass `safeLinkUrl`. Never assign diagram-derived markup to `innerHTML`.
 - Diagrams are addressed by UUID. Public reads need the UUID and the public token together, compare the token in constant time, answer a uniform 404, and return the public projection only. A diagram leaving `public` gets a new token.
 - Every read path (search, listings, tags, versions, comments, links, changelog, exports) applies the same visibility rule as the diagram detail. Writes take the diagram's row lock.
 - Outbound requests go only to fixed or validated destinations: no redirects, no proxy environment, bounded answers, provider bodies kept out of errors. Always validate TLS certificates and hostnames.
-- Password sign-in, second factors, SSO linking and account management follow KEEN's rules; a change there is made in KEEN, OSPMAE and MIDENA alike.
+- Password sign-in, second factors, SSO linking and sessions are myf's; a change there is made in myf, with its tests, for KEEN, OSPMAE and MIDENA alike. Accounts are administrators, ordinary accounts or inherit their role from their groups; what an ordinary account may do comes from its permissions.
 - Use bound SQL parameters and ORM expressions; escape `LIKE` wildcards with `autoescape=True`. Bound every integer parameter to the database's integer range.
 - Regular expressions over user input are linear: no nested or overlapping quantifiers. Test the costliest accepted input at the largest accepted size.
 - Fail closed on authentication or authorisation uncertainty. Keep errors useful without disclosing credentials, tokens or upstream response bodies.
@@ -41,7 +41,7 @@
 
 ## Validation
 
-- Use `.github/workflows/tests.yml`, `tests.sh` and `tests-ui.sh` as the authoritative test workflow. The backend suite runs on PostgreSQL only (`MIDENA_TEST_DATABASE_URL`, a disposable database; `tests/conftest.py` refuses anything else) and skips nothing. Never point tests at an operational installation.
+- Use `.github/workflows/tests.yml`, `tests.sh` and `tests-ui.sh` as the authoritative test workflow. The backend suite runs on PostgreSQL only (`MIDENA_TEST_DATABASE_URL`, a disposable database; `tests/conftest.py` refuses anything else) and skips nothing; Valkey is an in-memory stand-in (fakeredis). Never point tests at an operational installation. myf's own suite covers its sign-in, session and request rules; MIDENA's tests cover how MIDENA assembles them and everything MIDENA adds.
 - UI tests need `npm ci --prefix services/ui/tests`. Page tests load the real page HTML and classic scripts into jsdom through `services/ui/tests/support/load-page.mjs`, substituting only `window.MIDENA` or the network; assert what a user sees and what reaches the API.
 - `coverage-requirement.txt` and `coverage-requirement-ui.txt` are ratchets towards 100: raise them with each batch of tests, never lower them.
 - For security changes, add a reproducible negative test demonstrating the attack prerequisite and its rejection, through the assembled application where the property is enforced there.
@@ -63,7 +63,7 @@ Fix each confirmed issue across its whole class. Name the property it violates, 
 ## Backend architecture
 
 - The request path is middleware → HTTP adapter → domain operation → persistence. Middleware handles cross-cutting request policy for every route in one place; keep it generic.
-- `app/api/routes/` owns HTTP adapters. `app/security/` owns authentication, sessions, client addresses, allowances, content safety and redaction. `app/db/` owns models and session setup, `app/tasks/` owns background work, `app/services/` owns mail, notifications and integrations.
+- `app/api/routes/` owns HTTP adapters; myf's routers serve signing in and out, second factors, single sign-on and the account's own password and SSO addresses. `app/security/` owns MIDENA's route policy and permissions. `app/db/` owns models (myf's account mixins and MIDENA's own tables) and session setup, `app/tasks/` owns background work, `app/services/` owns mail, notifications and integrations.
 - Migrations live in `alembic/versions/` as explicit DDL; never `create_all` or an import of `app`. Write the model change, the migration and a test touching both together; `tests/test_migrations.py` checks that upgrading matches the models.
 - A request's session discards whatever it has not committed. Queue mail in the transaction of the change it reports.
 

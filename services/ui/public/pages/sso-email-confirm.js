@@ -13,7 +13,7 @@
   button.addEventListener("click", async () => {
     button.disabled = true;
     try {
-      const result = await window.MIDENA.api("/v1/me/sso-emails/confirm", {
+      const result = await window.MIDENA.api("/api/v1/me/sso-emails/confirm", {
         method: "POST",
         body: { token },
       });

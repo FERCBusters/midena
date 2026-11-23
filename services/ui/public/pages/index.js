@@ -170,7 +170,7 @@
   }
 
   async function loadTagCatalog() {
-    const data = await api("/v1/tags");
+    const data = await api("/api/v1/tags");
     state.tags = data.items || [];
     state.tagMap = new Map(state.tags.map((tag) => [tagKey(tag.name), tag]));
     const datalist = document.getElementById("tagSuggestions");
@@ -346,7 +346,7 @@
   }
 
   async function loadFolders() {
-    const data = await api("/v1/folders");
+    const data = await api("/api/v1/folders");
     state.folders = data?.items || [];
     for (const sel of [
       document.getElementById("folderFilter"),
@@ -400,7 +400,7 @@
   }
 
   async function loadTagCloud() {
-    const data = await api("/v1/diagram-tags");
+    const data = await api("/api/v1/diagram-tags");
     const host = document.getElementById("tagCloud");
     host.innerHTML =
       (data.items || [])
@@ -441,9 +441,12 @@
   async function cloneDiagram(ref) {
     if (!window.confirm("Clone this diagram into a new editable diagram?"))
       return;
-    const cloned = await api(`/v1/diagrams/${encodeURIComponent(ref)}/clone`, {
-      method: "POST",
-    });
+    const cloned = await api(
+      `/api/v1/diagrams/${encodeURIComponent(ref)}/clone`,
+      {
+        method: "POST",
+      },
+    );
     toast("Diagram cloned.", "success");
     window.location.href = `/diagram.html?id=${encodeURIComponent(cloned.uuid)}`;
   }
@@ -487,7 +490,7 @@
     if (type) params.set("diagram_type", type);
     if (state.selectedTags.size)
       params.set("tags", Array.from(state.selectedTags).join(","));
-    const data = await api(`/v1/diagrams?${params}`);
+    const data = await api(`/api/v1/diagrams?${params}`);
     const rows = document.getElementById("diagramRows");
     if (!data?.items?.length) {
       rows.innerHTML =
@@ -607,7 +610,7 @@
   async function loadNewDiagramAiStatus() {
     if (newDiagramAi.status) return newDiagramAi.status;
     try {
-      newDiagramAi.status = await api("/v1/diagram-ai/status");
+      newDiagramAi.status = await api("/api/v1/diagram-ai/status");
     } catch (err) {
       newDiagramAi.status = {
         enabled: false,
@@ -657,7 +660,7 @@
     sendBtn.innerHTML =
       '<span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>Asking…';
     try {
-      const data = await api("/v1/diagram-ai/generate", {
+      const data = await api("/api/v1/diagram-ai/generate", {
         method: "POST",
         body: {
           diagram_type: type,
@@ -800,7 +803,7 @@
             body.flowchart_text = importCode;
           else body.bpmn_xml = importCode;
         }
-        const diagram = await api("/v1/diagrams", { method: "POST", body });
+        const diagram = await api("/api/v1/diagrams", { method: "POST", body });
         modal.hide();
         window.location.href = `/diagram.html?id=${encodeURIComponent(diagram.uuid)}`;
       } catch (err) {

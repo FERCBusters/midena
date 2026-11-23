@@ -40,33 +40,30 @@ def test_sharing_a_diagram_mails_the_account_it_is_shared_with(outbox):
     assert [m.recipient for m in messages] == ["viewer@x.test"]
     body = messages[0].body
     # The link comes from MIDENA_PUBLIC_BASE_URL, never from the request.
-    assert f"https://midena.example.com/diagram.html?id={diagram['uuid']}" in body
+    assert f"https://testserver/diagram.html?id={diagram['uuid']}" in body
     assert "Mailed Subject" in body
     assert outbox.kicks == [] or outbox.kicks
 
 
-def test_a_share_without_a_public_base_url_sends_no_link(outbox, monkeypatch):
-    from app.core.config import settings
-
+def test_a_share_link_never_comes_from_the_request(outbox):
     from tests.support import make_diagram
 
-    monkeypatch.setattr(settings, "public_base_url", "")
     admin = _admin()
     make_user(
-        "nolink",
+        "hostless",
         "Synthetic-share-mail-passphrase",
         role="viewer",
-        email="nolink@x.test",
+        email="hostless@x.test",
     )
     diagram = make_diagram(admin)
     response = admin.post(
         f"/v1/diagrams/{diagram['uuid']}/shares",
-        json={"identifier": "nolink"},
+        json={"identifier": "hostless"},
         headers={**_csrf(admin), "Host": "attacker.example"},
     )
     assert response.status_code == 200, response.text
     (message,) = outbox.messages()
-    assert "http" not in message.body
+    assert "https://testserver/diagram.html" in message.body
     assert "attacker.example" not in message.body
 
 

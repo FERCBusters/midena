@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from celery import Celery
+from myf import worker as myf_worker
 
 from app.core.config import settings
 
@@ -42,8 +43,9 @@ celery_app.conf.update(
     task_soft_time_limit=max(1, settings.task_time_limit_seconds - 60),
     task_time_limit=settings.task_time_limit_seconds,
     beat_schedule={
-        # Housekeeping: expired login states, SSO e-mail proofs, rate-limit
-        # ledger rows and audit rows past retention never accumulate.
+        # Housekeeping: expired sign-in states, second-factor challenges, SSO
+        # e-mail proofs, diagram locks and audit rows past retention never
+        # accumulate.
         "sweep-expired-rows": {
             "task": "app.tasks.maintenance.sweep_expired_rows",
             "schedule": timedelta(minutes=15),
@@ -56,3 +58,6 @@ celery_app.conf.update(
         },
     },
 )
+
+# Each task's deadline, and its statement labels with MIDENA_SQL_TRACE on.
+myf_worker.connect(celery_app, sql_trace=settings.sql_trace)

@@ -678,7 +678,7 @@
     return;
   }
   const response = await fetch(
-    `/v1/public/diagrams/${encodeURIComponent(ref.id)}/${encodeURIComponent(ref.token)}`,
+    `/api/v1/public/diagrams/${encodeURIComponent(ref.id)}/${encodeURIComponent(ref.token)}`,
     { credentials: "omit" },
   );
   if (!response.ok) {

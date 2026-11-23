@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import threading
-from datetime import timedelta
 
 import pytest
 from app.core.config import settings
-from app.core.datetime_utils import utc_now_naive
-from app.db.models import DiagramLock, DiagramVersion, RateLimitEntry, User
+from app.db.models import DiagramVersion, User
 from app.db.session import SessionLocal
 from fastapi.testclient import TestClient
 
@@ -73,39 +71,6 @@ def test_lock_lifetimes_are_bounded(client):
         assert response.status_code == 422, ttl
 
 
-def test_the_sweeper_removes_expired_locks_and_keeps_live_allowances(
-    client, monkeypatch
-):
-    from app.tasks.maintenance import sweep_expired_rows
-
-    owner, user = auth_client(role="contributor")
-    diagram = make_diagram(owner)
-    monkeypatch.setattr(settings, "ai_rate_limit_window_seconds", 86400)
-    now = utc_now_naive()
-    with SessionLocal() as s:
-        s.add(
-            DiagramLock(
-                diagram_id=diagram["id"],
-                user_id=user.id,
-                expires_at=now - timedelta(seconds=1),
-            )
-        )
-        s.add(
-            RateLimitEntry(
-                identifier="diagram_ai:user:1", timestamp=now - timedelta(hours=5)
-            )
-        )
-        s.add(RateLimitEntry(identifier="old", timestamp=now - timedelta(days=2)))
-        s.commit()
-    result = sweep_expired_rows.run()
-    assert result["diagram_locks"] == 1
-    # A five-hour-old attempt still counts inside a day-long AI window.
-    assert result["rate_limit_entries"] == 1
-    with SessionLocal() as s:
-        kept = {r.identifier for r in s.query(RateLimitEntry).all()}
-    assert "diagram_ai:user:1" in kept and "old" not in kept
-
-
 def test_diagram_saves_take_more_than_a_form_and_no_more_than_their_class(client):
     owner, _ = auth_client(role="contributor")
     diagram = make_diagram(owner)
@@ -133,7 +98,7 @@ def test_diagram_saves_take_more_than_a_form_and_no_more_than_their_class(client
 
 
 def test_a_cookie_name_with_hidden_bytes_is_not_read_as_the_session(client):
-    from app.security.request_limits import screen_cookies
+    from myf.security.request_limits import screen_cookies
 
     scope = {
         "type": "http",
@@ -153,7 +118,7 @@ def test_a_cookie_name_with_hidden_bytes_is_not_read_as_the_session(client):
 
 @pytest.fixture()
 def bootstrap(monkeypatch):
-    from app.main import bootstrap_initial_admin
+    from myf.middleware import bootstrap_initial_admin
 
     def run(username, password):
         monkeypatch.setattr(settings, "bootstrap_admin_username", username)
@@ -181,8 +146,16 @@ def test_the_first_administrator_is_created_on_an_empty_installation_only(
 def test_the_application_creates_the_first_administrator_as_it_starts(
     client, monkeypatch
 ):
+    from app import main
     from app.main import app
 
+    async def nothing():
+        return None
+
+    # The client fixture's application already listens for notices; a second
+    # listener in another event loop is not what this test is about.
+    monkeypatch.setattr(main, "start_notification_listener", nothing)
+    monkeypatch.setattr(main, "stop_notification_listener", nothing)
     monkeypatch.setattr(settings, "bootstrap_admin_username", "started-admin")
     monkeypatch.setattr(settings, "bootstrap_admin_password", generated_password())
     with TestClient(app):

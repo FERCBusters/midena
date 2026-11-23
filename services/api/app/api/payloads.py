@@ -1,30 +1,20 @@
 from __future__ import annotations
 
 import re
+import uuid
 from typing import Annotated, Any, Literal
 
+from myf.security.passwords import MAX_PASSWORD_LENGTH
+from myf.security.urls import external_url
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
 from app.api.deps import DB_INT_MAX
-from app.security.passwords import MAX_PASSWORD_LENGTH
-from app.security.url_safety import validate_safe_href
 
 DbIdItem = Annotated[StrictInt, Field(ge=1, le=DB_INT_MAX)]
 
 # -----------------------------------------------------------------------------
 # Auth / admin
 # -----------------------------------------------------------------------------
-
-
-class LoginPayload(BaseModel):
-    username: str = Field(min_length=1, max_length=160)
-    password: str = Field(min_length=8, max_length=MAX_PASSWORD_LENGTH)
-
-
-class ChangePasswordPayload(BaseModel):
-    current_password: str = Field(min_length=8, max_length=MAX_PASSWORD_LENGTH)
-    new_password: str = Field(min_length=8, max_length=MAX_PASSWORD_LENGTH)
-    confirm_password: str = Field(min_length=8, max_length=MAX_PASSWORD_LENGTH)
 
 
 class AdminSetPasswordPayload(BaseModel):
@@ -35,11 +25,11 @@ class AdminUserCreatePayload(BaseModel):
     username: str = Field(min_length=1, max_length=160)
     email: str | None = Field(default=None, max_length=255)
     password: str = Field(min_length=8, max_length=MAX_PASSWORD_LENGTH)
-    role: str = Field(min_length=1, max_length=50)
+    role: Literal["admin", "normal", "inherit"] = "normal"
 
 
 class AdminUserUpdatePayload(BaseModel):
-    role: str | None = Field(default=None, min_length=1, max_length=50)
+    role: Literal["admin", "normal", "inherit"] | None = None
     is_active: bool | None = None
     email: str | None = Field(default=None, max_length=255)
 
@@ -59,12 +49,12 @@ class AdminGroupUpdatePayload(BaseModel):
 # Identifier lists are JSON arrays of integers: a string such as "12" is
 # refused rather than read character by character.
 class AdminUserAccessUpdatePayload(BaseModel):
-    group_ids: list[DbIdItem] = Field(default_factory=list, max_length=500)
-    permission_ids: list[DbIdItem] = Field(default_factory=list, max_length=500)
+    group_ids: list[uuid.UUID] = Field(default_factory=list, max_length=500)
+    permission_ids: list[uuid.UUID] = Field(default_factory=list, max_length=500)
 
 
 class AdminGroupPermissionsUpdatePayload(BaseModel):
-    permission_ids: list[DbIdItem] = Field(default_factory=list, max_length=500)
+    permission_ids: list[uuid.UUID] = Field(default_factory=list, max_length=500)
 
 
 # -----------------------------------------------------------------------------
@@ -92,7 +82,7 @@ class UserShortcutCreatePayload(BaseModel):
         s = str(v or "").strip()
         if not s:
             return s
-        return validate_safe_href(s, allow_relative=True)
+        return external_url(s, allow_relative=True)
 
 
 # -----------------------------------------------------------------------------
@@ -209,7 +199,7 @@ def _validate_link_url(value: str | None) -> str | None:
     s = str(value or "").strip()
     if not s:
         return None
-    return validate_safe_href(s, allow_relative=False)
+    return external_url(s)
 
 
 _TAG_COLOUR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -435,7 +425,7 @@ class DiagramEntityLinkPayload(BaseModel):
         s = str(v or "").strip()
         if not s:
             return None
-        return validate_safe_href(s, allow_relative=True)
+        return external_url(s, allow_relative=True)
 
 
 class DiagramMetadataLinkPayload(BaseModel):

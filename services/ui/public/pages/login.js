@@ -6,22 +6,6 @@
   const ssoSection = document.getElementById("ssoSection");
   const ssoButtons = document.getElementById("ssoButtons");
 
-  let redirectAllowedHosts = [];
-
-  function _normalizeAllowedHosts(raw) {
-    if (!Array.isArray(raw)) return [];
-    const out = [];
-    for (const v of raw) {
-      const h = String(v || "")
-        .trim()
-        .toLowerCase();
-      if (!h) continue;
-      if (h.includes("://") || h.includes("/") || h.includes("\\")) continue;
-      out.push(h);
-    }
-    return out;
-  }
-
   function sanitizeNext(rawNext) {
     const raw = String(rawNext || "").trim();
     if (!raw) return "/index.html";
@@ -37,20 +21,13 @@
       return "/index.html";
     }
 
-    if (u.protocol !== "http:" && u.protocol !== "https:") return "/index.html";
-    if (u.origin === window.location.origin) {
-      // Dot segments are resolved by now, so "/.//host" has become "//host",
-      // which a navigation reads as another site: such a path never replays.
-      const path = u.pathname + u.search + u.hash;
-      return path.startsWith("//") ? "/index.html" : path;
-    }
-
-    const host = String(u.hostname || "")
-      .trim()
-      .toLowerCase();
-    if (u.protocol === "https:" && host && redirectAllowedHosts.includes(host))
-      return u.toString();
-    return "/index.html";
+    // A completed sign-in stays on MIDENA, as the server's own sign-in
+    // redirects do.
+    if (u.origin !== window.location.origin) return "/index.html";
+    // Dot segments are resolved by now, so "/.//host" has become "//host",
+    // which a navigation reads as another site: such a path never replays.
+    const path = u.pathname + u.search + u.hash;
+    return path.startsWith("//") ? "/index.html" : path;
   }
 
   // Where a completed sign-in goes: an explicit ?next= first. Without one,
@@ -91,18 +68,9 @@
   function renderSsoButtons(methods) {
     if (!ssoSection || !ssoButtons) return;
 
-    let providers = Array.isArray(methods?.sso_providers)
+    const providers = Array.isArray(methods?.sso_providers)
       ? methods.sso_providers
       : [];
-    if (!providers.length && methods?.oidc_enabled && methods?.oidc) {
-      providers = [
-        {
-          key: "oidc",
-          label: methods.oidc.label || "Single sign-on",
-          start_url: methods.oidc.start_url || "/v1/auth/oidc/start",
-        },
-      ];
-    }
     if (!providers.length) return;
 
     ssoButtons.replaceChildren();
@@ -113,7 +81,7 @@
         .trim()
         .toLowerCase();
       const startUrl =
-        String(provider?.start_url || "").trim() || "/v1/auth/oidc/start";
+        String(provider?.start_url || "").trim() || "/api/v1/auth/oidc/start";
 
       const button = document.createElement("button");
       button.className = "btn btn-outline-primary w-100";
@@ -136,14 +104,11 @@
 
   async function initAuthMethods() {
     try {
-      const methods = await window.MIDENA?.api?.("/v1/auth/methods", {
+      const methods = await window.MIDENA?.api?.("/api/v1/auth/methods", {
         allowErrorStatuses: [404, 500],
       });
       if (!methods) return null;
 
-      redirectAllowedHosts = _normalizeAllowedHosts(
-        methods.redirect_allowed_hosts,
-      );
       renderSsoButtons(methods);
 
       if (methods.local_enabled === false && form) {
@@ -161,7 +126,7 @@
 
   async function pingMe() {
     try {
-      const me = await window.MIDENA?.api?.("/v1/me", {
+      const me = await window.MIDENA?.api?.("/api/v1/me", {
         allowErrorStatuses: [401],
       });
       if (me && me.username) {
@@ -188,7 +153,7 @@
         return;
       }
 
-      const res = await window.MIDENA?.api?.("/v1/auth/login", {
+      const res = await window.MIDENA?.api?.("/api/v1/auth/login", {
         method: "POST",
         body: { username, password },
       });

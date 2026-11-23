@@ -21,7 +21,9 @@ repos:
         exclude: '/(vendor|node_modules|dist)/'
       - id: python-types
         name: Check Python types
-        entry: bash -c 'cd services/api && poetry run mypy'
+        # The cache follows the lock file: one kept from another install of
+        # the same package version can hide a module the new one adds.
+        entry: bash -c 'cd services/api && poetry run mypy --cache-dir ".mypy_cache/lock-$(sha256sum poetry.lock | cut -c1-16)"'
         language: system
         pass_filenames: false
         files: '^services/api/(app/.*\.py|pyproject\.toml|poetry\.lock)$'

@@ -95,7 +95,7 @@
 
   async function loadLocks() {
     const { api, escapeHtml, formatTimestamp, toast } = window.MIDENA;
-    const data = await api("/v1/admin/diagram-locks");
+    const data = await api("/api/v1/admin/diagram-locks");
     const rows = document.getElementById("lockRows");
     const items = data.items || [];
     rows.innerHTML = items.length
@@ -109,9 +109,12 @@
     rows.querySelectorAll("[data-unlock]").forEach((btn) =>
       btn.addEventListener("click", async () => {
         try {
-          await api(`/v1/admin/diagrams/${Number(btn.dataset.unlock)}/unlock`, {
-            method: "POST",
-          });
+          await api(
+            `/api/v1/admin/diagrams/${Number(btn.dataset.unlock)}/unlock`,
+            {
+              method: "POST",
+            },
+          );
           toast("Diagram unlocked.", "success");
           await loadLocks();
         } catch (err) {
@@ -122,7 +125,7 @@
   }
 
   async function saveChrome(extra = {}) {
-    const chrome = await window.MIDENA.api("/v1/admin/diagram-chrome", {
+    const chrome = await window.MIDENA.api("/api/v1/admin/diagram-chrome", {
       method: "PUT",
       body: {
         header_text: document.getElementById("globalHeader").value,
@@ -162,7 +165,7 @@
       .getElementById("resetThemeBtn")
       ?.addEventListener("click", () => renderThemeForm(DEFAULT_THEME));
     try {
-      const chrome = await api("/v1/admin/diagram-chrome");
+      const chrome = await api("/api/v1/admin/diagram-chrome");
       document.getElementById("globalHeader").value = chrome.header_text || "";
       document.getElementById("globalFooter").value = chrome.footer_text || "";
       renderThemeForm(chrome.theme_settings || DEFAULT_THEME);

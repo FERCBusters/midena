@@ -48,7 +48,7 @@ test("the public diagram is fetched without credentials by its id and token", as
     { status: 404 },
   );
   assert.deepEqual(requests, [
-    ["GET", `/v1/public/diagrams/${ID}/${TOKEN}`, undefined],
+    ["GET", `/api/v1/public/diagrams/${ID}/${TOKEN}`, undefined],
   ]);
   assert.deepEqual(credentials, ["omit"]);
   assert.equal(

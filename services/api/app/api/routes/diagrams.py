@@ -10,8 +10,17 @@ from typing import Annotated
 from xml.etree import ElementTree as ET
 
 import anyio
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import Depends, HTTPException, Query, Request
 from fastapi.responses import Response
+from myf import host
+from myf.api.routing import Router
+from myf.core.datetime_utils import utc_now_naive
+from myf.core.valkey import get_valkey
+from myf.security.permissions import has_permission
+from myf.security.rate_limit import sliding_window_allow
+from myf.security.roles import ROLE_ADMIN, attach_effective_role
+from myf.security.svg import SvgError, sanitise_svg
+from myf.security.xml import parse_untrusted_xml
 from sqlalchemy import String, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -36,7 +45,6 @@ from app.api.payloads import (
     GoogleDriveExportPayload,
 )
 from app.core.config import settings
-from app.core.datetime_utils import utc_now_naive
 from app.core.features import is_enabled, require_feature
 from app.db.models import (
     Diagram,
@@ -58,12 +66,7 @@ from app.security.permissions import (
     PERM_DIAGRAM_READ_PRIVATE,
     PERM_DIAGRAM_WRITE,
     PERM_FOLDER_MANAGE,
-    has_permission,
 )
-from app.security.rate_limit import take_rate_limit
-from app.security.roles import ROLE_ADMIN, attach_effective_role
-from app.security.svg import SvgError, sanitise_svg
-from app.security.xml import parse_untrusted_xml
 from app.services import google_drive
 from app.services.diagram_ai import (
     DiagramAIError,
@@ -79,9 +82,14 @@ from app.services.entity_changelog import (
     list_entity_changelogs,
     record_entity_changelog,
 )
-from app.services.mailer import send_diagram_share_email
+from app.services.notifications import send_diagram_share_email
 
-router = APIRouter()
+router = Router()
+
+MIB = 1024 * 1024
+# A diagram's BPMN source and its rendered SVG are each read whole; larger
+# documents are refused before parsing.
+MAX_XML_BYTES = 3 * MIB
 
 BPMN_NS = "http://www.omg.org/spec/BPMN/20100524/MODEL"
 # Sequence and flowchart source: Mermaid documents of a few kilobytes; the
@@ -286,12 +294,13 @@ def _validate_bpmn_xml(xml: str | None) -> str:
     if not value:
         raise HTTPException(status_code=400, detail="BPMN XML must not be empty")
     try:
-        root = parse_untrusted_xml(value, strict=True)
+        root = parse_untrusted_xml(value, strict=True, max_bytes=MAX_XML_BYTES)
     except ET.ParseError:
         raise HTTPException(
             status_code=400,
             detail=(
-                "BPMN XML must be well-formed, at most 3 MiB, and hold no "
+                f"BPMN XML must be well-formed, at most {MAX_XML_BYTES // MIB} MiB, "
+                "and hold no "
                 "document type declaration or processing instruction"
             ),
         ) from None
@@ -305,7 +314,7 @@ def _validate_svg_xml(svg: str | None) -> str | None:
     if svg is None or not svg.strip():
         return None
     try:
-        return sanitise_svg(svg)
+        return sanitise_svg(svg, max_bytes=MAX_XML_BYTES)
     except SvgError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
 
@@ -537,11 +546,10 @@ def _new_public_token() -> str:
     return secrets.token_urlsafe(36)
 
 
-def _absolute_url(path: str) -> str | None:
-    """A link for mail: only from MIDENA_PUBLIC_BASE_URL, never from a request's
-    Host header, which the client chooses."""
-    base = settings.public_base_url.strip().rstrip("/")
-    return f"{base}{path}" if base else None
+def _absolute_url(path: str) -> str:
+    """A link for mail: only from MIDENA_PUBLIC_BASE_URL (required), never
+    from a request's Host header, which the client chooses."""
+    return f"{settings.public_base_url.rstrip('/')}{path}"
 
 
 def _effective_role(db: Session, user: User) -> str:
@@ -1303,8 +1311,23 @@ def get_diagram_ai_status(
     return status
 
 
+def take_rate_limit(
+    identifier: str, *, max_attempts: int, window_seconds: int
+) -> tuple[bool, int]:
+    """Admit and count one attempt in a sliding window, or refuse it.
+
+    Fails closed: without the store, costly work is not started.
+    """
+    return sliding_window_allow(
+        get_valkey(),
+        f"{host.name()}:rl:{identifier}",
+        max_attempts,
+        window_seconds,
+    )
+
+
 def _ai_rate_limit_id(user: User) -> str:
-    return f"diagram_ai:user:{int(user.id)}"
+    return f"diagram_ai:user:{user.id}"
 
 
 _SEQUENCE_KEYWORDS = (

@@ -69,7 +69,7 @@ test("signing in opens one notification socket for the session", async (t) => {
   assert.equal(page.me.username, "ada");
   assert.deepEqual(
     page.opened.map((socket) => socket.url),
-    ["wss://midena.example/ws/notifications"],
+    ["wss://midena.example/api/ws/notifications"],
   );
   // Asking again while it is open reuses it.
   page.app.startNotifications();
@@ -95,7 +95,7 @@ test("a dropped socket reconnects while signed in", async (t) => {
   assert.equal(page.opened.length, 2);
 });
 
-test("signing out closes the socket and leaves through the server with the CSRF value", async (t) => {
+test("signing out is a POST with the CSRF token, then closes the socket and leaves", async (t) => {
   const page = await shell(t, {
     setup(window) {
       window.document.cookie = "theme=ink";
@@ -104,6 +104,9 @@ test("signing out closes the socket and leaves through the server with the CSRF 
   });
   page.opened[0].failsToClose = true;
   await page.app.logout();
+  assert.deepEqual(page.sent("POST", "/api/v1/auth/logout"), [{}]);
+  const index = page.requests.findIndex(([method]) => method === "POST");
+  assert.equal(page.requestHeaders[index]["X-CSRF-Token"], "abc 123");
   assert.equal(page.opened[0].closed, 1);
   assert.equal(page.navigations(), 1);
   assert.equal(page.app.state.me, null);
@@ -112,6 +115,37 @@ test("signing out closes the socket and leaves through the server with the CSRF 
   await pause(2100);
   assert.equal(page.opened.length, 1);
   assert.equal(page.app.getUserPreferences().theme, "ink");
+});
+
+test("a provider's session signs out at the address its profile names", async (t) => {
+  const page = await shell(t, {
+    me: account("admin", { logout_url: "/api/v1/auth/oidc/logout" }),
+    api: (method, path) =>
+      method === "POST" && path === "/api/v1/auth/oidc/logout"
+        ? [200, { logout_url: "https://idp.example/end" }]
+        : undefined,
+  });
+  await page.app.logout();
+  assert.deepEqual(page.sent("POST", "/api/v1/auth/oidc/logout"), [{}]);
+  assert.deepEqual(page.sent("POST", "/api/v1/auth/logout"), []);
+  assert.equal(page.navigations(), 1);
+});
+
+test("a sign-out the server could not complete keeps the page signed in", async (t) => {
+  const page = await shell(t, {
+    api: (method, path) =>
+      method === "POST" && path === "/api/v1/auth/logout"
+        ? [503, { detail: "Sign-out could not be completed; try again" }]
+        : undefined,
+  });
+  await page.app.logout();
+  assert.deepEqual(page.sent("POST", "/api/v1/auth/logout"), [{}]);
+  assert.equal(page.navigations(), 0);
+  assert.equal(page.app.state.me.username, "ada");
+  assert.equal(page.opened[0].closed, 0);
+  assert.deepEqual(page.toasts(), [
+    ["danger", "Sign-out could not be completed; try again."],
+  ]);
 });
 
 test("the host-bound CSRF cookie is read ahead of one a sibling site could plant", async (t) => {
@@ -125,8 +159,8 @@ test("the host-bound CSRF cookie is read ahead of one a sibling site could plant
     },
   });
   assert.match(page.window.document.cookie, /midena_csrf=planted/);
-  await page.app.api("/v1/thing", { method: "POST", body: { a: 1 } });
-  await page.app.api("/v1/thing", { method: "DELETE" });
+  await page.app.api("/api/v1/thing", { method: "POST", body: { a: 1 } });
+  await page.app.api("/api/v1/thing", { method: "DELETE" });
   const [post, remove] = page.requestHeaders.slice(-2);
   assert.equal(post["X-CSRF-Token"], "issued");
   assert.equal(remove["X-CSRF-Token"], "issued");
@@ -139,7 +173,7 @@ test("the bare CSRF cookie serves an installation that sets no prefix", async (t
       window.document.cookie = "midena_csrf=plain";
     },
   });
-  await page.app.api("/v1/thing", { method: "PUT", body: {} });
+  await page.app.api("/api/v1/thing", { method: "PUT", body: {} });
   assert.equal(page.requestHeaders.at(-1)["X-CSRF-Token"], "plain");
 });
 
@@ -149,8 +183,8 @@ test("unsafe requests carry the CSRF cookie in preference to the cached token", 
       window.document.cookie = "midena_csrf=from-cookie";
     },
   });
-  await page.app.api("/v1/thing", { method: "POST", body: { a: 1 } });
-  await page.app.api("/v1/thing");
+  await page.app.api("/api/v1/thing", { method: "POST", body: { a: 1 } });
+  await page.app.api("/api/v1/thing");
   const [post, get] = page.requestHeaders.slice(-2);
   assert.equal(post["X-CSRF-Token"], "from-cookie");
   assert.equal(post["Content-Type"], "application/json");
@@ -221,7 +255,7 @@ test("a visitor without a session is sent to sign in, unless the page asks other
 
   const broken = await shell(t, {
     api: (method, path) =>
-      path === "/v1/me" ? [500, { detail: "down" }] : null,
+      path === "/api/v1/me" ? [500, { detail: "down" }] : null,
   });
   assert.equal(broken.me, null);
   assert.equal(broken.navigations(), 1);
@@ -230,7 +264,7 @@ test("a visitor without a session is sent to sign in, unless the page asks other
 test("feature switches that cannot be read leave every area on", async (t) => {
   const page = await shell(t, {
     api: (method, path) =>
-      path === "/v1/system/features" ? [500, { detail: "down" }] : null,
+      path === "/api/v1/system/features" ? [500, { detail: "down" }] : null,
   });
   assert.equal(page.me.username, "ada");
   assert.equal(page.app.featureOn("ai_generation"), true);
@@ -238,7 +272,9 @@ test("feature switches that cannot be read leave every area on", async (t) => {
 
 test("the site root moves on to the account's start page", async (t) => {
   const prefer = (page) => (method, path) =>
-    path === "/v1/me/preferences" ? [200, { default_start_page: page }] : null;
+    path === "/api/v1/me/preferences"
+      ? [200, { default_start_page: page }]
+      : null;
   const moved = await shell(t, {
     address: "https://midena.example/",
     api: prefer("folders.html"),
@@ -263,7 +299,7 @@ test("the site root moves on to the account's start page", async (t) => {
 test("colours saved under the old capability names still apply", async (t) => {
   const page = await shell(t, {
     api: (method, path) =>
-      path === "/v1/me/preferences"
+      path === "/api/v1/me/preferences"
         ? [
             200,
             {
@@ -303,7 +339,7 @@ test("colours saved under the old capability names still apply", async (t) => {
 test("preferences that fail to load fall back to the defaults", async (t) => {
   const page = await shell(t, {
     api: (method, path) =>
-      path === "/v1/me/preferences" ? [500, { detail: "down" }] : null,
+      path === "/api/v1/me/preferences" ? [500, { detail: "down" }] : null,
   });
   assert.deepEqual(JSON.parse(JSON.stringify(page.app.getUserPreferences())), {
     theme: "ink",
@@ -315,9 +351,9 @@ test("preferences that fail to load fall back to the defaults", async (t) => {
     diagram_sidebar_collapsed_by_default: true,
   });
   // Loaded once, they are not asked for again.
-  const before = page.sent("GET", "/v1/me/preferences").length;
+  const before = page.sent("GET", "/api/v1/me/preferences").length;
   await page.app.loadUserPreferences();
-  assert.equal(page.sent("GET", "/v1/me/preferences").length, before);
+  assert.equal(page.sent("GET", "/api/v1/me/preferences").length, before);
 });
 
 test("controls of switched-off features and pages above the role are hidden", async (t) => {
@@ -362,4 +398,75 @@ test("a toast of an unknown kind is shown plainly, and an empty one is skipped",
     ["secondary", "Heads up"],
     ["warning", "Careful"],
   ]);
+});
+
+test("the navbar's sign-out button signs out here, ahead of the design system", async (t) => {
+  const page = await shell(t);
+  let shellHandled = 0;
+  let cacheCleared = 0;
+  page.window.mospUi = { clearCachedMe: () => (cacheCleared += 1) };
+  const button = page.window.document.createElement("button");
+  button.id = "navLogout";
+  button.addEventListener("click", () => (shellHandled += 1));
+  page.window.document.body.append(button);
+  button.click();
+  await page.wait();
+  assert.deepEqual(page.sent("POST", "/api/v1/auth/logout"), [{}]);
+  assert.equal(shellHandled, 0);
+  assert.equal(cacheCleared, 1);
+  assert.equal(page.navigations(), 1);
+  // Other clicks are left alone.
+  page.window.document.body.click();
+  assert.equal(page.sent("POST", "/api/v1/auth/logout").length, 1);
+});
+
+test("a page signing out before it has read the profile reads it first", async (t) => {
+  const page = await shell(t, {
+    signIn: false,
+    me: account("admin", { logout_url: "/api/v1/auth/oidc/logout" }),
+    api: (method, path) =>
+      method === "POST" && path === "/api/v1/auth/oidc/logout"
+        ? [200, { logout_url: "https://idp.example/end" }]
+        : undefined,
+  });
+  await page.app.logout();
+  assert.deepEqual(page.sent("POST", "/api/v1/auth/oidc/logout"), [{}]);
+  assert.equal(page.navigations(), 1);
+});
+
+test("a page that cannot read the profile still signs out", async (t) => {
+  const page = await shell(t, { signIn: false, me: null });
+  await page.app.logout();
+  assert.deepEqual(page.sent("POST", "/api/v1/auth/logout"), [{}]);
+  assert.equal(page.navigations(), 1);
+});
+
+test("a busy button shows progress, refuses a second press and is restored", async (t) => {
+  const page = await shell(t);
+  const button = page.window.document.createElement("button");
+  button.textContent = "Save";
+  let release;
+  const running = page.app.runBusy(
+    button,
+    "Saving…",
+    () => new Promise((resolve) => (release = resolve)),
+  );
+  assert.equal(button.disabled, true);
+  assert.equal(button.getAttribute("aria-busy"), "true");
+  assert.equal(button.textContent, "Saving…");
+  assert.equal(await page.app.runBusy(button, "Again", () => "ran"), undefined);
+  release("saved");
+  assert.equal(await running, "saved");
+  assert.deepEqual(
+    [button.disabled, button.hasAttribute("aria-busy"), button.textContent],
+    [false, false, "Save"],
+  );
+  // A failed write restores the button too; without one the task just runs.
+  await assert.rejects(
+    page.app.runBusy(button, "Saving…", async () => {
+      throw new Error("refused");
+    }),
+  );
+  assert.equal(button.disabled, false);
+  assert.equal(await page.app.runBusy(null, "x", () => "plain"), "plain");
 });

@@ -294,7 +294,7 @@
       el.textContent = "";
       return;
     }
-    const role = state.me.effective_role || state.me.role || "viewer";
+    const role = state.me.effective_role || state.me.role || "normal";
     el.textContent = `${state.me.username} (${role})`;
   }
 
@@ -330,7 +330,7 @@
       return;
     }
 
-    const url = `${wsBaseUrl()}/ws/notifications`;
+    const url = `${wsBaseUrl()}/api/ws/notifications`;
     let ws;
     try {
       ws = new WebSocket(url);
@@ -370,7 +370,7 @@
     return (
       state.me?.effective_role ||
       state.me?.role ||
-      "viewer"
+      "normal"
     ).toLowerCase();
   }
 
@@ -513,7 +513,7 @@
 
     state.userPreferencesPromise = (async () => {
       try {
-        const pref = await apiRequest("/v1/me/preferences", {
+        const pref = await apiRequest("/api/v1/me/preferences", {
           allowErrorStatuses: [404],
         });
         state.userPreferences = normalizeUserPreferences(pref || null);
@@ -573,7 +573,7 @@
       payload.theme = String(update.theme || "").trim() || null;
     }
 
-    const saved = await apiRequest("/v1/me/preferences", {
+    const saved = await apiRequest("/api/v1/me/preferences", {
       method: "PUT",
       body: payload,
     });
@@ -706,7 +706,9 @@
 
     state.authInitPromise = (async () => {
       try {
-        const me = await apiRequest("/v1/me", { allowErrorStatuses: [401] });
+        const me = await apiRequest("/api/v1/me", {
+          allowErrorStatuses: [401],
+        });
         if (!me || me.detail) {
           state.me = null;
           state.csrfToken = null;
@@ -725,7 +727,7 @@
         // Load installation feature switches once; optional pages gate
         // themselves on them.
         if (!state.featuresPromise) {
-          state.featuresPromise = apiRequest("/v1/system/features", {
+          state.featuresPromise = apiRequest("/api/v1/system/features", {
             allowErrorStatuses: [404, 401, 403],
           })
             .then((f) => {
@@ -771,18 +773,32 @@
   }
 
   async function logout() {
-    // Prefer a full-page navigation so the browser reliably applies cookie
-    // clears + any redirect to an IdP end-session endpoint. The server-side
-    // session is only destroyed when the navigation carries the CSRF cookie
-    // value, so a cross-site link cannot log a user out.
+    // Signing out is a POST carrying the session's CSRF token, so a
+    // cross-site link cannot sign anyone out. A provider's session answers
+    // with the provider's end-session page, which the browser then visits.
+    const me =
+      state.me ||
+      (await apiRequest("/api/v1/me", { allowErrorStatuses: [401] }).catch(
+        () => null,
+      ));
+    const logoutUrl = String(me?.logout_url || "/api/v1/auth/logout");
+    const redirect = String(me?.logout_redirect || "/login.html");
+    let result = null;
+    try {
+      result = await apiRequest(logoutUrl, { method: "POST", body: {} });
+    } catch (err) {
+      // The session is still valid on the server: keep it, and say so.
+      console.warn("Sign-out failed", err);
+      toast("Sign-out could not be completed; try again.", "error");
+      return;
+    }
     stopNotifications();
     state.me = null;
     state.csrfToken = null;
     state.userPreferences = normalizeUserPreferences(null);
     state.userPreferencesLoaded = false;
     state.userPreferencesPromise = null;
-    const csrf = csrfCookie() || "";
-    window.location.href = "/v1/auth/logout?csrf=" + encodeURIComponent(csrf);
+    window.location.href = String(result?.logout_url || redirect);
   }
 
   async function ensureInitialized() {
@@ -990,6 +1006,22 @@
     toggle.setAttribute("aria-expanded", String(expanded));
     toggle.textContent = expanded ? "Collapse" : "Expand";
   });
+
+  // Signing out changes the session, so the navbar's button signs out with
+  // a POST carrying the CSRF token (logout above). Heard while capturing at
+  // the document, ahead of the design system's own handler on the button,
+  // which would leave by visiting a provider's sign-out address.
+  document.addEventListener(
+    "click",
+    (event) => {
+      if (!event.target.closest?.("#navLogout")) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      window.mospUi?.clearCachedMe?.();
+      logout();
+    },
+    { capture: true },
+  );
 
   window.MIDENA = {
     state,

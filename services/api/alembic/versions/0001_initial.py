@@ -65,79 +65,45 @@ def upgrade() -> None:
     )
     op.create_table(
         "groups",
-        sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column("name", sa.String(length=200), nullable=False),
-        sa.Column("role", sa.String(length=50), nullable=True),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(), nullable=False),
+        sa.Column("id", sa.UUID(), nullable=False),
+        sa.Column("name", sa.String(length=64), nullable=False),
         sa.Column("description", sa.Text(), nullable=True),
+        sa.Column("role", sa.String(length=32), nullable=True),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(op.f("ix_groups_name"), "groups", ["name"], unique=True)
     op.create_table(
-        "login_throttles",
-        sa.Column("name_key", sa.String(length=64), nullable=False),
-        sa.Column("failures", sa.Integer(), nullable=False),
-        sa.Column("gate_until", sa.DateTime(), nullable=True),
-        sa.Column("last_failure_at", sa.DateTime(), nullable=False),
-        sa.PrimaryKeyConstraint("name_key"),
-    )
-    op.create_index(
-        op.f("ix_login_throttles_last_failure_at"),
-        "login_throttles",
-        ["last_failure_at"],
-        unique=False,
-    )
-    op.create_table(
         "oidc_login_states",
-        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("state", sa.String(length=255), nullable=False),
         sa.Column("nonce", sa.String(length=255), nullable=False),
-        sa.Column("code_verifier", sa.String(length=255), nullable=False),
+        sa.Column("code_verifier", sa.Text(), nullable=False),
         sa.Column("next_url", sa.Text(), nullable=True),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.Column("expires_at", sa.DateTime(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index(
-        op.f("ix_oidc_login_states_state"), "oidc_login_states", ["state"], unique=True
+        sa.UniqueConstraint("state"),
     )
     op.create_table(
         "permissions",
-        sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column("code", sa.String(length=120), nullable=False),
+        sa.Column("id", sa.UUID(), nullable=False),
+        sa.Column("code", sa.String(length=128), nullable=False),
         sa.Column("description", sa.Text(), nullable=True),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(op.f("ix_permissions_code"), "permissions", ["code"], unique=True)
     op.create_table(
-        "rate_limit_entries",
-        sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column("identifier", sa.String(length=255), nullable=False),
-        sa.Column("timestamp", sa.DateTime(), nullable=False),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index(
-        op.f("ix_rate_limit_entries_identifier"),
-        "rate_limit_entries",
-        ["identifier"],
-        unique=False,
-    )
-    op.create_index(
-        op.f("ix_rate_limit_entries_timestamp"),
-        "rate_limit_entries",
-        ["timestamp"],
-        unique=False,
-    )
-    op.create_table(
         "users",
-        sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column("username", sa.String(length=160), nullable=False),
-        sa.Column("email", sa.String(length=255), nullable=True),
+        sa.Column("id", sa.UUID(), nullable=False),
+        sa.Column("username", sa.String(length=128), nullable=False),
         sa.Column("password_hash", sa.String(length=255), nullable=False),
-        sa.Column("role", sa.String(length=50), nullable=False),
-        sa.Column("is_active", sa.Boolean(), nullable=False),
+        sa.Column(
+            "auth_backend", sa.String(length=16), server_default="local", nullable=False
+        ),
         sa.Column("mfa_enabled", sa.Boolean(), server_default="false", nullable=False),
+        sa.Column("session_version", sa.Integer(), server_default="0", nullable=False),
         sa.Column("mfa_version", sa.Integer(), server_default="0", nullable=False),
         sa.Column("mfa_totp_secret", sa.Text(), nullable=True),
         sa.Column(
@@ -147,12 +113,15 @@ def upgrade() -> None:
             "mfa_code_failures", sa.Integer(), server_default="0", nullable=False
         ),
         sa.Column("mfa_code_failures_since", sa.DateTime(), nullable=True),
-        sa.Column("last_login_at", sa.DateTime(), nullable=True),
+        sa.Column("email", sa.String(length=256), nullable=True),
+        sa.Column("role", sa.String(length=32), nullable=False),
+        sa.Column("is_active", sa.Boolean(), nullable=False),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.Column("updated_at", sa.DateTime(), nullable=False),
+        sa.Column("authz_version", sa.Integer(), nullable=False),
+        sa.Column("last_login_at", sa.DateTime(), nullable=True),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(op.f("ix_users_email"), "users", ["email"], unique=True)
     op.create_index(op.f("ix_users_username"), "users", ["username"], unique=True)
     op.create_table(
         "entity_changelogs",
@@ -170,7 +139,7 @@ def upgrade() -> None:
             "after_state", postgresql.JSONB(astext_type=sa.Text()), nullable=True
         ),
         sa.Column("changes", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
-        sa.Column("changed_by_user_id", sa.Integer(), nullable=True),
+        sa.Column("changed_by_user_id", sa.UUID(), nullable=True),
         sa.Column("changed_by_username", sa.String(length=128), nullable=True),
         sa.Column("changed_at", sa.DateTime(), nullable=False),
         sa.Column("request_method", sa.String(length=16), nullable=True),
@@ -237,7 +206,7 @@ def upgrade() -> None:
         sa.Column("slug", sa.String(length=200), nullable=True),
         sa.Column("description", sa.Text(), nullable=True),
         sa.Column("sort_order", sa.Integer(), nullable=False),
-        sa.Column("created_by_user_id", sa.Integer(), nullable=True),
+        sa.Column("created_by_user_id", sa.UUID(), nullable=True),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.Column("updated_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(
@@ -259,7 +228,7 @@ def upgrade() -> None:
         sa.Column(
             "theme_settings", postgresql.JSONB(astext_type=sa.Text()), nullable=False
         ),
-        sa.Column("updated_by_user_id", sa.Integer(), nullable=True),
+        sa.Column("updated_by_user_id", sa.UUID(), nullable=True),
         sa.Column("updated_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(
             ["updated_by_user_id"], ["users.id"], ondelete="SET NULL"
@@ -268,37 +237,13 @@ def upgrade() -> None:
     )
     op.create_table(
         "group_permissions",
-        sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column("group_id", sa.Integer(), nullable=False),
-        sa.Column("permission_id", sa.Integer(), nullable=False),
+        sa.Column("group_id", sa.UUID(), nullable=False),
+        sa.Column("permission_id", sa.UUID(), nullable=False),
         sa.ForeignKeyConstraint(["group_id"], ["groups.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(
             ["permission_id"], ["permissions.id"], ondelete="CASCADE"
         ),
-        sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("group_id", "permission_id", name="uq_group_permission"),
-    )
-    op.create_table(
-        "login_devices",
-        sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column("token_hash", sa.String(length=64), nullable=False),
-        sa.Column("user_id", sa.Integer(), nullable=False),
-        sa.Column("name_key", sa.String(length=64), nullable=False),
-        sa.Column("failures", sa.Integer(), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.Column("expires_at", sa.DateTime(), nullable=False),
-        sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("token_hash"),
-    )
-    op.create_index(
-        op.f("ix_login_devices_expires_at"),
-        "login_devices",
-        ["expires_at"],
-        unique=False,
-    )
-    op.create_index(
-        op.f("ix_login_devices_user_id"), "login_devices", ["user_id"], unique=False
+        sa.PrimaryKeyConstraint("group_id", "permission_id"),
     )
     op.create_table(
         "managed_configuration_revisions",
@@ -306,7 +251,7 @@ def upgrade() -> None:
         sa.Column("name", sa.String(length=64), nullable=False),
         sa.Column("version", sa.Integer(), nullable=False),
         sa.Column("document", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
-        sa.Column("updated_by", sa.Integer(), nullable=True),
+        sa.Column("updated_by", sa.UUID(), nullable=True),
         sa.Column("updated_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(["updated_by"], ["users.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
@@ -323,7 +268,7 @@ def upgrade() -> None:
         sa.Column("name", sa.String(length=64), nullable=False),
         sa.Column("document", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         sa.Column("version", sa.Integer(), nullable=False),
-        sa.Column("updated_by", sa.Integer(), nullable=True),
+        sa.Column("updated_by", sa.UUID(), nullable=True),
         sa.Column("updated_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(["updated_by"], ["users.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("name"),
@@ -331,7 +276,7 @@ def upgrade() -> None:
     op.create_table(
         "mfa_challenges",
         sa.Column("token_hash", sa.String(length=64), nullable=False),
-        sa.Column("user_id", sa.Integer(), nullable=False),
+        sa.Column("user_id", sa.UUID(), nullable=False),
         sa.Column("purpose", sa.String(length=16), nullable=False),
         sa.Column("stage", sa.String(length=16), nullable=False),
         sa.Column("version", sa.Integer(), nullable=False),
@@ -352,8 +297,8 @@ def upgrade() -> None:
     )
     op.create_table(
         "mfa_credentials",
-        sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column("user_id", sa.Integer(), nullable=False),
+        sa.Column("id", sa.UUID(), nullable=False),
+        sa.Column("user_id", sa.UUID(), nullable=False),
         sa.Column("credential_id", sa.Text(), nullable=False),
         sa.Column("public_key", sa.Text(), nullable=False),
         sa.Column("sign_count", sa.BigInteger(), nullable=False),
@@ -369,7 +314,7 @@ def upgrade() -> None:
     )
     op.create_table(
         "mfa_recovery_codes",
-        sa.Column("user_id", sa.Integer(), nullable=False),
+        sa.Column("user_id", sa.UUID(), nullable=False),
         sa.Column("code_hash", sa.String(length=64), nullable=False),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("user_id", "code_hash"),
@@ -377,7 +322,7 @@ def upgrade() -> None:
     op.create_table(
         "notifications",
         sa.Column("id", sa.UUID(), nullable=False),
-        sa.Column("user_id", sa.Integer(), nullable=True),
+        sa.Column("user_id", sa.UUID(), nullable=True),
         sa.Column("recipient", sa.String(length=255), nullable=False),
         sa.Column("subject", sa.String(length=500), nullable=False),
         sa.Column("body", sa.Text(), nullable=False),
@@ -402,26 +347,31 @@ def upgrade() -> None:
         op.f("ix_notifications_user_id"), "notifications", ["user_id"], unique=False
     )
     op.create_table(
-        "sessions",
-        sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column("session_id", sa.String(length=255), nullable=False),
-        sa.Column("user_id", sa.Integer(), nullable=False),
+        "security_notifications",
+        sa.Column("id", sa.UUID(), nullable=False),
+        sa.Column("user_id", sa.UUID(), nullable=True),
+        sa.Column("recipient", sa.Text(), nullable=False),
+        sa.Column("subject", sa.Text(), nullable=False),
+        sa.Column("body", sa.Text(), nullable=False),
+        sa.Column("status", sa.String(length=16), nullable=False),
+        sa.Column("attempts", sa.Integer(), nullable=False),
         sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.Column("expires_at", sa.DateTime(), nullable=False),
-        sa.Column("auth_method", sa.String(length=20), nullable=False),
-        sa.Column("mfa_verified", sa.Boolean(), server_default="false", nullable=False),
-        sa.Column("mfa_version", sa.Integer(), server_default="0", nullable=False),
-        sa.Column("oidc_id_token", sa.Text(), nullable=True),
-        sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
+        sa.Column("next_attempt_at", sa.DateTime(), nullable=False),
+        sa.Column("sent_at", sa.DateTime(), nullable=True),
+        sa.Column("last_error", sa.String(length=100), nullable=True),
+        sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        op.f("ix_sessions_session_id"), "sessions", ["session_id"], unique=True
+        "ix_security_notifications_pending",
+        "security_notifications",
+        ["status", "next_attempt_at"],
+        unique=False,
     )
     op.create_table(
         "sso_email_challenges",
         sa.Column("token_hash", sa.String(length=64), nullable=False),
-        sa.Column("user_id", sa.Integer(), nullable=False),
+        sa.Column("user_id", sa.UUID(), nullable=False),
         sa.Column("email", sa.String(length=256), nullable=False),
         sa.Column("expires_at", sa.DateTime(), nullable=False),
         sa.Column("mfa_version", sa.Integer(), nullable=False),
@@ -437,22 +387,20 @@ def upgrade() -> None:
     )
     op.create_table(
         "user_groups",
-        sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column("user_id", sa.Integer(), nullable=False),
-        sa.Column("group_id", sa.Integer(), nullable=False),
+        sa.Column("user_id", sa.UUID(), nullable=False),
+        sa.Column("group_id", sa.UUID(), nullable=False),
         sa.ForeignKeyConstraint(["group_id"], ["groups.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("user_id", "group_id", name="uq_user_group"),
+        sa.PrimaryKeyConstraint("user_id", "group_id"),
     )
     op.create_table(
         "user_identities",
-        sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column("user_id", sa.Integer(), nullable=False),
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("user_id", sa.UUID(), nullable=False),
         sa.Column("provider", sa.String(length=40), nullable=False),
-        sa.Column("issuer", sa.String(length=500), nullable=False),
-        sa.Column("subject", sa.String(length=255), nullable=False),
-        sa.Column("email", sa.String(length=255), nullable=True),
+        sa.Column("issuer", sa.String(length=512), nullable=False),
+        sa.Column("subject", sa.String(length=512), nullable=False),
+        sa.Column("email", sa.String(length=320), nullable=True),
         sa.Column("preferred_username", sa.String(length=255), nullable=True),
         sa.Column("display_name", sa.String(length=255), nullable=True),
         sa.Column("claims", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
@@ -461,7 +409,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
-            "issuer", "subject", name="uq_user_identity_issuer_subject"
+            "issuer", "subject", name="uq_user_identities_issuer_subject"
         ),
     )
     op.create_index(
@@ -469,7 +417,7 @@ def upgrade() -> None:
     )
     op.create_table(
         "user_login_ips",
-        sa.Column("user_id", sa.Integer(), nullable=False),
+        sa.Column("user_id", sa.UUID(), nullable=False),
         sa.Column("address", sa.String(length=45), nullable=False),
         sa.Column("first_seen_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
@@ -477,20 +425,18 @@ def upgrade() -> None:
     )
     op.create_table(
         "user_permissions",
-        sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column("user_id", sa.Integer(), nullable=False),
-        sa.Column("permission_id", sa.Integer(), nullable=False),
+        sa.Column("user_id", sa.UUID(), nullable=False),
+        sa.Column("permission_id", sa.UUID(), nullable=False),
         sa.ForeignKeyConstraint(
             ["permission_id"], ["permissions.id"], ondelete="CASCADE"
         ),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("user_id", "permission_id", name="uq_user_permission"),
+        sa.PrimaryKeyConstraint("user_id", "permission_id"),
     )
     op.create_table(
         "user_preferences",
         sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column("user_id", sa.Integer(), nullable=False),
+        sa.Column("user_id", sa.UUID(), nullable=False),
         sa.Column("theme", sa.String(length=16), nullable=True),
         sa.Column(
             "node_colors", postgresql.JSONB(astext_type=sa.Text()), nullable=False
@@ -509,7 +455,7 @@ def upgrade() -> None:
     op.create_table(
         "user_shortcuts",
         sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column("user_id", sa.Integer(), nullable=False),
+        sa.Column("user_id", sa.UUID(), nullable=False),
         sa.Column("name", sa.String(length=200), nullable=False),
         sa.Column("url", sa.Text(), nullable=False),
         sa.Column("created_at", sa.DateTime(), nullable=False),
@@ -524,7 +470,7 @@ def upgrade() -> None:
     op.create_table(
         "user_sso_emails",
         sa.Column("email", sa.String(length=256), nullable=False),
-        sa.Column("user_id", sa.Integer(), nullable=False),
+        sa.Column("user_id", sa.UUID(), nullable=False),
         sa.Column("verified_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("email"),
@@ -547,8 +493,8 @@ def upgrade() -> None:
         sa.Column("current_version_id", sa.Integer(), nullable=True),
         sa.Column("header_text", sa.Text(), nullable=True),
         sa.Column("footer_text", sa.Text(), nullable=True),
-        sa.Column("created_by_user_id", sa.Integer(), nullable=True),
-        sa.Column("updated_by_user_id", sa.Integer(), nullable=True),
+        sa.Column("created_by_user_id", sa.UUID(), nullable=True),
+        sa.Column("updated_by_user_id", sa.UUID(), nullable=True),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.Column("updated_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(
@@ -585,7 +531,7 @@ def upgrade() -> None:
         "diagram_comments",
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("diagram_id", sa.Integer(), nullable=False),
-        sa.Column("user_id", sa.Integer(), nullable=True),
+        sa.Column("user_id", sa.UUID(), nullable=True),
         sa.Column("element_id", sa.String(length=255), nullable=True),
         sa.Column("body", sa.Text(), nullable=False),
         sa.Column("is_resolved", sa.Boolean(), nullable=False),
@@ -625,7 +571,7 @@ def upgrade() -> None:
         sa.Column(
             "metadata_json", postgresql.JSONB(astext_type=sa.Text()), nullable=False
         ),
-        sa.Column("created_by_user_id", sa.Integer(), nullable=True),
+        sa.Column("created_by_user_id", sa.UUID(), nullable=True),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.Column("updated_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(
@@ -669,7 +615,7 @@ def upgrade() -> None:
         "diagram_locks",
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("diagram_id", sa.Integer(), nullable=False),
-        sa.Column("user_id", sa.Integer(), nullable=True),
+        sa.Column("user_id", sa.UUID(), nullable=True),
         sa.Column("locked_at", sa.DateTime(), nullable=False),
         sa.Column("expires_at", sa.DateTime(), nullable=True),
         sa.Column("heartbeat_at", sa.DateTime(), nullable=True),
@@ -700,7 +646,7 @@ def upgrade() -> None:
         sa.Column("label", sa.String(length=512), nullable=False),
         sa.Column("url", sa.Text(), nullable=False),
         sa.Column("notes", sa.Text(), nullable=True),
-        sa.Column("created_by_user_id", sa.Integer(), nullable=True),
+        sa.Column("created_by_user_id", sa.UUID(), nullable=True),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.Column("updated_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(
@@ -719,9 +665,9 @@ def upgrade() -> None:
         "diagram_shares",
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("diagram_id", sa.Integer(), nullable=False),
-        sa.Column("user_id", sa.Integer(), nullable=False),
+        sa.Column("user_id", sa.UUID(), nullable=False),
         sa.Column("role", sa.String(length=32), nullable=False),
-        sa.Column("created_by_user_id", sa.Integer(), nullable=True),
+        sa.Column("created_by_user_id", sa.UUID(), nullable=True),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.Column("updated_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(
@@ -753,7 +699,7 @@ def upgrade() -> None:
         sa.Column("flowchart_text", sa.Text(), nullable=True),
         sa.Column("svg_xml", sa.Text(), nullable=True),
         sa.Column("change_summary", sa.Text(), nullable=True),
-        sa.Column("created_by_user_id", sa.Integer(), nullable=True),
+        sa.Column("created_by_user_id", sa.UUID(), nullable=True),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(
             ["created_by_user_id"], ["users.id"], ondelete="SET NULL"
@@ -782,6 +728,7 @@ def upgrade() -> None:
         ["diagram_type"],
         unique=False,
     )
+    # ### end Alembic commands ###
 
 
 def downgrade() -> None:
@@ -843,8 +790,10 @@ def downgrade() -> None:
         op.f("ix_sso_email_challenges_user_id"), table_name="sso_email_challenges"
     )
     op.drop_table("sso_email_challenges")
-    op.drop_index(op.f("ix_sessions_session_id"), table_name="sessions")
-    op.drop_table("sessions")
+    op.drop_index(
+        "ix_security_notifications_pending", table_name="security_notifications"
+    )
+    op.drop_table("security_notifications")
     op.drop_index(op.f("ix_notifications_user_id"), table_name="notifications")
     op.drop_index("ix_notifications_pending", table_name="notifications")
     op.drop_table("notifications")
@@ -860,9 +809,6 @@ def downgrade() -> None:
         table_name="managed_configuration_revisions",
     )
     op.drop_table("managed_configuration_revisions")
-    op.drop_index(op.f("ix_login_devices_user_id"), table_name="login_devices")
-    op.drop_index(op.f("ix_login_devices_expires_at"), table_name="login_devices")
-    op.drop_table("login_devices")
     op.drop_table("group_permissions")
     op.drop_table("global_diagram_chrome")
     op.drop_index(op.f("ix_folders_uuid"), table_name="folders")
@@ -892,23 +838,10 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_entity_changelogs_action"), table_name="entity_changelogs")
     op.drop_table("entity_changelogs")
     op.drop_index(op.f("ix_users_username"), table_name="users")
-    op.drop_index(op.f("ix_users_email"), table_name="users")
     op.drop_table("users")
-    op.drop_index(
-        op.f("ix_rate_limit_entries_timestamp"), table_name="rate_limit_entries"
-    )
-    op.drop_index(
-        op.f("ix_rate_limit_entries_identifier"), table_name="rate_limit_entries"
-    )
-    op.drop_table("rate_limit_entries")
     op.drop_index(op.f("ix_permissions_code"), table_name="permissions")
     op.drop_table("permissions")
-    op.drop_index(op.f("ix_oidc_login_states_state"), table_name="oidc_login_states")
     op.drop_table("oidc_login_states")
-    op.drop_index(
-        op.f("ix_login_throttles_last_failure_at"), table_name="login_throttles"
-    )
-    op.drop_table("login_throttles")
     op.drop_index(op.f("ix_groups_name"), table_name="groups")
     op.drop_table("groups")
     op.drop_index(op.f("ix_diagram_tags_name_lower"), table_name="diagram_tags")
@@ -919,3 +852,4 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_audit_logs_path"), table_name="audit_logs")
     op.drop_index(op.f("ix_audit_logs_method"), table_name="audit_logs")
     op.drop_table("audit_logs")
+    # ### end Alembic commands ###

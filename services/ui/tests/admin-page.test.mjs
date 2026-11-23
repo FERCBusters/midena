@@ -4,11 +4,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { account, appPage } from "./support/app-page.mjs";
 
+// Accounts, groups and permissions are named by UUID.
+const ID = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+
 const local = (text) => new Date(`${text}Z`).toLocaleString();
 
 const USERS = [
   {
-    id: 7,
+    id: ID(7),
     username: "ada",
     email: "ada@example.org",
     role: "admin",
@@ -17,29 +20,29 @@ const USERS = [
     last_login_at: "2026-03-04T10:00:00",
   },
   {
-    id: 9,
+    id: ID(9),
     username: "bob <b>",
     email: null,
     role: "inherit",
-    effective_role: "engineer",
+    effective_role: "normal",
     is_active: false,
     last_login_at: null,
   },
 ];
 const GROUPS = [
   {
-    id: 4,
+    id: ID(4),
     name: "Reviewers",
     description: "Second pair of eyes",
-    role: "engineer",
+    role: "normal",
     member_count: 2,
     permission_count: 1,
   },
-  { id: 5, name: "Guests", description: null, role: null },
+  { id: ID(5), name: "Guests", description: null, role: null },
 ];
 const PERMISSIONS = [
-  { id: 21, code: "projects.write", description: "Edit projects" },
-  { id: 22, code: "frameworks.write", description: "" },
+  { id: ID(21), code: "projects.write", description: "Edit projects" },
+  { id: ID(22), code: "frameworks.write", description: "" },
 ];
 
 function auditRows(count, start = 0) {
@@ -47,7 +50,7 @@ function auditRows(count, start = 0) {
     ts: "2026-03-04T10:00:00",
     username: i === 0 ? null : "ada",
     method: "GET",
-    path: `/v1/projects/${start + i}`,
+    path: `/api/v1/projects/${start + i}`,
     query_string: i === 0 ? "q=<x>" : "",
     status_code: [200, 302, 404, 500][i % 4],
     duration_ms: i === 0 ? null : 12,
@@ -70,34 +73,37 @@ function admin(t, options = {}) {
   const api = (method, route, body, params) => {
     const failure = world.fail[`${method} ${route}`];
     if (failure) return [failure[0], { detail: failure[1] }];
-    if (route === "/v1/admin/users" && method === "GET")
+    if (route === "/api/v1/admin/users" && method === "GET")
       return [200, { items: world.users }];
-    if (route === "/v1/admin/users" && method === "POST") {
+    if (route === "/api/v1/admin/users" && method === "POST") {
       world.users.push({
-        id: 30,
+        id: ID(30),
         ...body,
         effective_role: body.role,
         is_active: true,
       });
       return [201, {}];
     }
-    if (route === "/v1/admin/groups" && method === "GET")
+    if (route === "/api/v1/admin/groups" && method === "GET")
       return [200, { items: world.groups }];
-    if (route === "/v1/admin/groups" && method === "POST") {
-      world.groups.push({ id: 31, ...body });
+    if (route === "/api/v1/admin/groups" && method === "POST") {
+      world.groups.push({ id: ID(31), ...body });
       return [201, {}];
     }
-    if (route === "/v1/admin/permissions") return [200, { items: PERMISSIONS }];
-    const user = route.match(/^\/v1\/admin\/users\/(\d+)(\/\w+)?$/);
+    if (route === "/api/v1/admin/permissions")
+      return [200, { items: PERMISSIONS }];
+    const user = route.match(
+      /^\/api\/v1\/admin\/users\/([0-9a-f-]{36})(\/\w+)?$/,
+    );
     if (user) {
-      const id = Number(user[1]);
+      const id = user[1];
       if (user[2] === "/access" && method === "GET")
         return [
           200,
           {
             user_id: id,
-            group_ids: [4],
-            permission_ids: [22],
+            group_ids: [ID(4)],
+            permission_ids: [ID(22)],
             available_groups: world.groups,
             available_permissions: PERMISSIONS,
           },
@@ -111,15 +117,17 @@ function admin(t, options = {}) {
         world.users = world.users.filter((u) => u.id !== id);
       return [200, {}];
     }
-    const group = route.match(/^\/v1\/admin\/groups\/(\d+)(\/\w+)?$/);
+    const group = route.match(
+      /^\/api\/v1\/admin\/groups\/([0-9a-f-]{36})(\/\w+)?$/,
+    );
     if (group) {
-      const id = Number(group[1]);
+      const id = group[1];
       if (group[2] === "/permissions" && method === "GET")
         return [
           200,
           {
             group_id: id,
-            permission_ids: [21],
+            permission_ids: [ID(21)],
             available_permissions: PERMISSIONS,
           },
         ];
@@ -132,7 +140,7 @@ function admin(t, options = {}) {
         world.groups = world.groups.filter((g) => g.id !== id);
       return [200, {}];
     }
-    if (route === "/v1/admin/audit") {
+    if (route === "/api/v1/admin/audit") {
       const offset = Number(params.get("offset"));
       const limit = Number(params.get("limit"));
       return [
@@ -145,7 +153,7 @@ function admin(t, options = {}) {
         },
       ];
     }
-    if (route === "/v1/admin/entity-changelog") {
+    if (route === "/api/v1/admin/entity-changelog") {
       const offset = Number(params.get("offset"));
       const limit = Number(params.get("limit"));
       const shown = Math.max(0, Math.min(limit, world.changelogTotal - offset));
@@ -166,12 +174,12 @@ function admin(t, options = {}) {
         },
       ];
     }
-    if (route === "/v1/organisations") return [200, world.organisations];
-    if (route === "/v1/admin/organisations" && method === "POST") {
+    if (route === "/api/v1/organisations") return [200, world.organisations];
+    if (route === "/api/v1/admin/organisations" && method === "POST") {
       world.organisations.push({ id: 60, project_count: 0, ...body });
       return [201, {}];
     }
-    const org = route.match(/^\/v1\/admin\/organisations\/(\d+)$/);
+    const org = route.match(/^\/api\/v1\/admin\/organisations\/(\d+)$/);
     if (org) {
       Object.assign(
         world.organisations.find((o) => o.id === Number(org[1])),
@@ -179,12 +187,12 @@ function admin(t, options = {}) {
       );
       return [200, {}];
     }
-    if (route === "/v1/admin/notifications")
+    if (route === "/api/v1/admin/notifications")
       return [
         200,
         options.outbox || { pending: 0, failed: 0, notifications: [] },
       ];
-    if (route === "/v1/admin/release-feeds/discover-all")
+    if (route === "/api/v1/admin/release-feeds/discover-all")
       return [200, { enqueued: 3, pending_notifications: 2 }];
     return null;
   };
@@ -244,7 +252,7 @@ test("anyone other than an administrator is sent back to the home page", async (
   const page = await admin(t, { me: account("maintainer") });
   assert.equal(page.navigations(), 1);
   assert.deepEqual(
-    page.asked().filter((call) => call.includes("/v1/admin/")),
+    page.asked().filter((call) => call.includes("/api/v1/admin/")),
     [],
   );
   assert.equal(page.$("usersTable").innerHTML, "");
@@ -262,13 +270,13 @@ test("accounts are listed with their role, state and last sign-in", async (t) =>
       true,
       local("2026-03-04T10:00:00"),
     ],
-    ["bob <b>", "", "inherit", "engineer", false, "—"],
+    ["bob <b>", "", "inherit", "normal", false, "—"],
   ]);
   // An administrator cannot deactivate or delete their own account.
-  assert.equal(page.field("usersTable", "active", 7).disabled, true);
-  assert.equal(page.button("usersTable", "delete-user", 7).disabled, true);
-  assert.equal(page.field("usersTable", "active", 9).disabled, false);
-  assert.equal(page.button("usersTable", "delete-user", 9).disabled, false);
+  assert.equal(page.field("usersTable", "active", ID(7)).disabled, true);
+  assert.equal(page.button("usersTable", "delete-user", ID(7)).disabled, true);
+  assert.equal(page.field("usersTable", "active", ID(9)).disabled, false);
+  assert.equal(page.button("usersTable", "delete-user", ID(9)).disabled, false);
 });
 
 test("an installation without accounts or groups says so", async (t) => {
@@ -282,14 +290,14 @@ test("creating an account sends the form and lists the new account", async (t) =
   page.$("cu-username").value = "  carol ";
   page.$("cu-email").value = " ";
   page.$("cu-password").value = "long enough";
-  page.$("cu-role").value = "engineer";
+  page.$("cu-role").value = "inherit";
   await page.submit("createUserForm");
-  assert.deepEqual(page.sent("POST", "/v1/admin/users"), [
+  assert.deepEqual(page.sent("POST", "/api/v1/admin/users"), [
     {
       username: "carol",
       email: null,
       password: "long enough",
-      role: "engineer",
+      role: "inherit",
     },
   ]);
   assert.deepEqual(page.message(), ["User created.", "small msg-success"]);
@@ -302,7 +310,7 @@ test("creating an account sends the form and lists the new account", async (t) =
 
 test("a refused account keeps the form and shows the reason", async (t) => {
   const page = await admin(t, {
-    fail: { "POST /v1/admin/users": [409, "Username already exists"] },
+    fail: { "POST /api/v1/admin/users": [409, "Username already exists"] },
   });
   page.$("cu-username").value = "ada";
   page.$("cu-password").value = "long enough";
@@ -317,30 +325,27 @@ test("a refused account keeps the form and shows the reason", async (t) => {
 
 test("saving a row sends its email, role and active state", async (t) => {
   const page = await admin(t);
-  page.field("usersTable", "email", 9).value = " bob@example.org ";
-  page.field("usersTable", "role", 9).value = "maintainer";
-  page.field("usersTable", "active", 9).checked = true;
-  await page.click(page.button("usersTable", "save-user", 9));
-  assert.deepEqual(page.sent("PATCH", "/v1/admin/users/9"), [
-    { role: "maintainer", is_active: true, email: "bob@example.org" },
+  page.field("usersTable", "email", ID(9)).value = " bob@example.org ";
+  page.field("usersTable", "role", ID(9)).value = "admin";
+  page.field("usersTable", "active", ID(9)).checked = true;
+  await page.click(page.button("usersTable", "save-user", ID(9)));
+  assert.deepEqual(page.sent("PATCH", `/api/v1/admin/users/${ID(9)}`), [
+    { role: "admin", is_active: true, email: "bob@example.org" },
   ]);
-  assert.deepEqual(page.message(), ["User #9 updated.", "small msg-success"]);
-  assert.deepEqual(userRows(page)[1].slice(1, 3), [
-    "bob@example.org",
-    "maintainer",
-  ]);
+  assert.deepEqual(page.message(), ["User updated.", "small msg-success"]);
+  assert.deepEqual(userRows(page)[1].slice(1, 3), ["bob@example.org", "admin"]);
 
   // Emptying the address clears it on the account.
-  page.field("usersTable", "email", 9).value = "";
-  await page.click(page.button("usersTable", "save-user", 9));
-  assert.equal(page.sent("PATCH", "/v1/admin/users/9")[1].email, "");
+  page.field("usersTable", "email", ID(9)).value = "";
+  await page.click(page.button("usersTable", "save-user", ID(9)));
+  assert.equal(page.sent("PATCH", `/api/v1/admin/users/${ID(9)}`)[1].email, "");
 });
 
 test("a password reset asks for the new password and sends it", async (t) => {
   const page = await admin(t);
-  await page.click(page.button("usersTable", "reset-password", 9));
+  await page.click(page.button("usersTable", "reset-password", ID(9)));
   assert.deepEqual(page.prompts, ["Set a new password for bob <b>:"]);
-  assert.deepEqual(page.sent("POST", "/v1/admin/users/9/password"), [
+  assert.deepEqual(page.sent("POST", `/api/v1/admin/users/${ID(9)}/password`), [
     { new_password: "correct horse" },
   ]);
   assert.deepEqual(page.message(), [
@@ -351,20 +356,25 @@ test("a password reset asks for the new password and sends it", async (t) => {
 
 test("a password reset left empty changes nothing", async (t) => {
   const page = await admin(t, { password: "" });
-  await page.click(page.button("usersTable", "reset-password", 9));
+  await page.click(page.button("usersTable", "reset-password", ID(9)));
   assert.equal(page.prompts.length, 1);
-  assert.deepEqual(page.sent("POST", "/v1/admin/users/9/password"), []);
+  assert.deepEqual(
+    page.sent("POST", `/api/v1/admin/users/${ID(9)}/password`),
+    [],
+  );
   assert.equal(page.message()[0], "");
 });
 
 test("deleting an account asks first and removes the row", async (t) => {
   const page = await admin(t);
-  await page.click(page.button("usersTable", "delete-user", 9));
+  await page.click(page.button("usersTable", "delete-user", ID(9)));
   assert.match(
     page.record.confirms[0],
     /^Delete user “bob <b>”\? This is permanent/,
   );
-  assert.deepEqual(page.sent("DELETE", "/v1/admin/users/9"), [undefined]);
+  assert.deepEqual(page.sent("DELETE", `/api/v1/admin/users/${ID(9)}`), [
+    undefined,
+  ]);
   assert.deepEqual(page.message(), [
     "User “bob <b>” deleted.",
     "small msg-success",
@@ -377,17 +387,22 @@ test("deleting an account asks first and removes the row", async (t) => {
 
 test("declining the confirmation keeps the account", async (t) => {
   const page = await admin(t, { confirm: false });
-  await page.click(page.button("usersTable", "delete-user", 9));
+  await page.click(page.button("usersTable", "delete-user", ID(9)));
   assert.equal(page.record.confirms.length, 1);
-  assert.deepEqual(page.sent("DELETE", "/v1/admin/users/9"), []);
+  assert.deepEqual(page.sent("DELETE", `/api/v1/admin/users/${ID(9)}`), []);
   assert.equal(userRows(page).length, 2);
 });
 
 test("a failed account change is reported beside the tables", async (t) => {
   const page = await admin(t, {
-    fail: { "DELETE /v1/admin/users/9": [400, "Cannot delete the last admin"] },
+    fail: {
+      [`DELETE /api/v1/admin/users/${ID(9)}`]: [
+        400,
+        "Cannot delete the last admin",
+      ],
+    },
   });
-  await page.click(page.button("usersTable", "delete-user", 9));
+  await page.click(page.button("usersTable", "delete-user", ID(9)));
   assert.deepEqual(page.message(), [
     "Cannot delete the last admin",
     "small msg-error",
@@ -397,7 +412,7 @@ test("a failed account change is reported beside the tables", async (t) => {
 
 test("an account's groups and direct permissions are edited in place", async (t) => {
   const page = await admin(t);
-  await page.click(page.button("usersTable", "edit-user-access", 9));
+  await page.click(page.button("usersTable", "edit-user-access", ID(9)));
   const boxes = () =>
     [...page.$("usersTable").querySelectorAll("input[data-kind]")].map(
       (box) => [
@@ -408,12 +423,12 @@ test("an account's groups and direct permissions are edited in place", async (t)
       ],
     );
   assert.deepEqual(boxes(), [
-    ["group", "4", true, "Reviewers (engineer)"],
-    ["group", "5", false, "Guests"],
-    ["perm", "21", false, "projects.write — Edit projects"],
-    ["perm", "22", true, "frameworks.write"],
+    ["group", ID(4), true, "Reviewers (normal)"],
+    ["group", ID(5), false, "Guests"],
+    ["perm", ID(21), false, "projects.write — Edit projects"],
+    ["perm", ID(22), true, "frameworks.write"],
   ]);
-  assert.match(page.$("usersTable").textContent, /Edit access for user #9/);
+  assert.match(page.$("usersTable").textContent, /Edit access/);
 
   const [reviewers, guests, write] = page
     .$("usersTable")
@@ -421,24 +436,21 @@ test("an account's groups and direct permissions are edited in place", async (t)
   reviewers.checked = false;
   guests.checked = true;
   write.checked = true;
-  await page.click(page.button("usersTable", "save-user-access", 9));
-  assert.deepEqual(page.sent("PUT", "/v1/admin/users/9/access"), [
-    { group_ids: [5], permission_ids: [21, 22] },
+  await page.click(page.button("usersTable", "save-user-access", ID(9)));
+  assert.deepEqual(page.sent("PUT", `/api/v1/admin/users/${ID(9)}/access`), [
+    { group_ids: [ID(5)], permission_ids: [ID(21), ID(22)] },
   ]);
-  assert.deepEqual(page.message(), [
-    "Access updated for user #9.",
-    "small msg-success",
-  ]);
+  assert.deepEqual(page.message(), ["Access updated.", "small msg-success"]);
   assert.equal(page.$("usersTable").querySelector("input[data-kind]"), null);
 });
 
 test("closing the access editor leaves the account as it was", async (t) => {
   const page = await admin(t);
-  await page.click(page.button("usersTable", "edit-user-access", 9));
+  await page.click(page.button("usersTable", "edit-user-access", ID(9)));
   assert.ok(page.$("usersTable").querySelector("input[data-kind]"));
   await page.click(page.button("usersTable", "cancel-user-access"));
   assert.equal(page.$("usersTable").querySelector("input[data-kind]"), null);
-  assert.deepEqual(page.sent("PUT", "/v1/admin/users/9/access"), []);
+  assert.deepEqual(page.sent("PUT", `/api/v1/admin/users/${ID(9)}/access`), []);
 });
 
 test("groups are listed with their role and counts", async (t) => {
@@ -454,7 +466,7 @@ test("groups are listed with their role and counts", async (t) => {
       row.children[5].textContent,
     ]);
   assert.deepEqual(rows, [
-    ["Reviewers", "Reviewers", "Second pair of eyes", "engineer", "2", "1"],
+    ["Reviewers", "Reviewers", "Second pair of eyes", "normal", "2", "1"],
     ["Guests", "Guests", "", "", "0", "0"],
   ]);
 });
@@ -464,17 +476,20 @@ test("creating a group sends its name and optional role", async (t) => {
   page.$("cg-name").value = " Auditors ";
   page.$("cg-role").value = "";
   await page.submit("createGroupForm");
-  assert.deepEqual(page.sent("POST", "/v1/admin/groups"), [
+  assert.deepEqual(page.sent("POST", "/api/v1/admin/groups"), [
     { name: "Auditors", role: null },
   ]);
   assert.deepEqual(page.message(), ["Group created.", "small msg-success"]);
   assert.equal(page.$("cg-name").value, "");
-  assert.equal(page.field("groupsTable", "group-name", 31).value, "Auditors");
+  assert.equal(
+    page.field("groupsTable", "group-name", ID(31)).value,
+    "Auditors",
+  );
 });
 
 test("a refused group shows the reason", async (t) => {
   const page = await admin(t, {
-    fail: { "POST /v1/admin/groups": [409, "Group already exists"] },
+    fail: { "POST /api/v1/admin/groups": [409, "Group already exists"] },
   });
   page.$("cg-name").value = "Guests";
   await page.submit("createGroupForm");
@@ -483,80 +498,86 @@ test("a refused group shows the reason", async (t) => {
 
 test("saving a group sends its name, description and role", async (t) => {
   const page = await admin(t);
-  page.field("groupsTable", "group-name", 5).value = " Visitors ";
-  page.field("groupsTable", "group-description", 5).value = " Read only ";
-  page.field("groupsTable", "group-role", 5).value = "viewer";
-  await page.click(page.button("groupsTable", "save-group", 5));
-  page.field("groupsTable", "group-description", 4).value = "";
-  page.field("groupsTable", "group-role", 4).value = "";
-  await page.click(page.button("groupsTable", "save-group", 4));
-  assert.deepEqual(page.sent("PATCH", "/v1/admin/groups/5"), [
-    { name: "Visitors", description: "Read only", role: "viewer" },
+  page.field("groupsTable", "group-name", ID(5)).value = " Visitors ";
+  page.field("groupsTable", "group-description", ID(5)).value = " Read only ";
+  page.field("groupsTable", "group-role", ID(5)).value = "normal";
+  await page.click(page.button("groupsTable", "save-group", ID(5)));
+  page.field("groupsTable", "group-description", ID(4)).value = "";
+  page.field("groupsTable", "group-role", ID(4)).value = "";
+  await page.click(page.button("groupsTable", "save-group", ID(4)));
+  assert.deepEqual(page.sent("PATCH", `/api/v1/admin/groups/${ID(5)}`), [
+    { name: "Visitors", description: "Read only", role: "normal" },
   ]);
-  assert.deepEqual(page.sent("PATCH", "/v1/admin/groups/4"), [
+  assert.deepEqual(page.sent("PATCH", `/api/v1/admin/groups/${ID(4)}`), [
     { name: "Reviewers", description: null, role: null },
   ]);
-  assert.deepEqual(page.message(), ["Group #4 updated.", "small msg-success"]);
+  assert.deepEqual(page.message(), ["Group updated.", "small msg-success"]);
 });
 
 test("deleting a group asks first, and a decline keeps it", async (t) => {
   const kept = await admin(t, { confirm: false });
-  await kept.click(kept.button("groupsTable", "delete-group", 4));
-  assert.deepEqual(kept.sent("DELETE", "/v1/admin/groups/4"), []);
+  await kept.click(kept.button("groupsTable", "delete-group", ID(4)));
+  assert.deepEqual(kept.sent("DELETE", `/api/v1/admin/groups/${ID(4)}`), []);
 
   const page = await admin(t);
-  await page.click(page.button("groupsTable", "delete-group", 4));
+  await page.click(page.button("groupsTable", "delete-group", ID(4)));
   assert.match(
     page.record.confirms[0],
     /^Delete group “Reviewers”\? This is permanent/,
   );
-  assert.deepEqual(page.sent("DELETE", "/v1/admin/groups/4"), [undefined]);
+  assert.deepEqual(page.sent("DELETE", `/api/v1/admin/groups/${ID(4)}`), [
+    undefined,
+  ]);
   assert.deepEqual(page.message(), [
     "Group “Reviewers” deleted.",
     "small msg-success",
   ]);
-  assert.equal(page.field("groupsTable", "group-name", 4), null);
+  assert.equal(page.field("groupsTable", "group-name", ID(4)), null);
 });
 
 test("a group's permissions are edited in place", async (t) => {
   const page = await admin(t);
-  await page.click(page.button("groupsTable", "edit-group-perms", 4));
+  await page.click(page.button("groupsTable", "edit-group-perms", ID(4)));
   const boxes = [...page.$("groupsTable").querySelectorAll("input[data-kind]")];
   assert.deepEqual(
     boxes.map((box) => [box.value, box.checked]),
     [
-      ["21", true],
-      ["22", false],
+      [ID(21), true],
+      [ID(22), false],
     ],
   );
   boxes[1].checked = true;
-  await page.click(page.button("groupsTable", "save-group-perms", 4));
-  assert.deepEqual(page.sent("PUT", "/v1/admin/groups/4/permissions"), [
-    { permission_ids: [21, 22] },
-  ]);
+  await page.click(page.button("groupsTable", "save-group-perms", ID(4)));
+  assert.deepEqual(
+    page.sent("PUT", `/api/v1/admin/groups/${ID(4)}/permissions`),
+    [{ permission_ids: [ID(21), ID(22)] }],
+  );
   assert.deepEqual(page.message(), [
-    "Permissions updated for group #4.",
+    "Group permissions updated.",
     "small msg-success",
   ]);
   assert.equal(page.$("groupsTable").querySelector("input[data-kind]"), null);
 
-  await page.click(page.button("groupsTable", "edit-group-perms", 5));
+  await page.click(page.button("groupsTable", "edit-group-perms", ID(5)));
   await page.click(page.button("groupsTable", "cancel-group-perms"));
   assert.equal(page.$("groupsTable").querySelector("input[data-kind]"), null);
-  assert.deepEqual(page.sent("PUT", "/v1/admin/groups/5/permissions"), []);
+  assert.deepEqual(
+    page.sent("PUT", `/api/v1/admin/groups/${ID(5)}/permissions`),
+    [],
+  );
 });
 
 test("a failed group change is reported", async (t) => {
   const page = await admin(t, {
-    fail: { "PATCH /v1/admin/groups/4": [409, "Name is taken"] },
+    fail: { [`PATCH /api/v1/admin/groups/${ID(4)}`]: [409, "Name is taken"] },
   });
-  await page.click(page.button("groupsTable", "save-group", 4));
+  await page.click(page.button("groupsTable", "save-group", ID(4)));
   assert.deepEqual(page.message(), ["Name is taken", "small msg-error"]);
 });
 
 test("accounts that fail to load are reported and the other tabs still fill", async (t) => {
   const page = await admin(t, {
-    fail: { "GET /v1/admin/users": [500, "Database unavailable"] },
+    fail: { "GET /api/v1/admin/users": [500, "Database unavailable"] },
   });
   assert.deepEqual(page.message(), ["Database unavailable", "small msg-error"]);
   assert.equal(page.$("auditMsg").textContent, "Showing 1–3 of 3");
@@ -571,7 +592,7 @@ test("the audit trail lists requests with their outcome", async (t) => {
     local("2026-03-04T10:00:00"),
     "anonymous",
     "GET",
-    "/v1/projects/0?q=<x>",
+    "/api/v1/projects/0?q=<x>",
     "200",
     "— ms",
     "—",
@@ -580,7 +601,7 @@ test("the audit trail lists requests with their outcome", async (t) => {
   assert.deepEqual(cells[1].slice(1), [
     "ada",
     "GET",
-    "/v1/projects/1",
+    "/api/v1/projects/1",
     "302",
     "12 ms",
     "10.0.0.1",
@@ -605,7 +626,7 @@ test("an empty audit trail says so", async (t) => {
   assert.equal(page.$("auditMsg").textContent, "Showing 0–0 of 0");
 });
 
-const auditQueries = (page, route = "/v1/admin/audit") =>
+const auditQueries = (page, route = "/api/v1/admin/audit") =>
   page.requests
     .filter(([, path]) => path.startsWith(`${route}?`))
     .map(([, path]) =>
@@ -664,7 +685,7 @@ test("a failed audit request leaves the page that was showing", async (t) => {
   const page = await admin(t, { auditTotal: 120 });
   await page.click("auditNextBtn");
   const shown = page.texts("#auditTable tbody code");
-  page.world.fail["GET /v1/admin/audit"] = [500, "Audit store offline"];
+  page.world.fail["GET /api/v1/admin/audit"] = [500, "Audit store offline"];
   for (const step of [
     () => page.click("refreshAuditBtn"),
     () => page.click("auditNextBtn"),
@@ -701,7 +722,7 @@ test("the changelog lists changes and pages like the audit trail", async (t) => 
   page.$("entity-q").value = "wallet";
   await page.submit("entityChangelogFilters");
   await page.click("refreshEntityChangelogBtn");
-  assert.deepEqual(auditQueries(page, "/v1/admin/entity-changelog"), [
+  assert.deepEqual(auditQueries(page, "/api/v1/admin/entity-changelog"), [
     { limit: "50", offset: "0" },
     { limit: "50", offset: "50" },
     { limit: "50", offset: "0" },
@@ -715,7 +736,7 @@ test("an empty or failing changelog says so", async (t) => {
   assert.deepEqual(page.texts("#entityChangelogList"), [
     "No entity changelog entries found.",
   ]);
-  page.world.fail["GET /v1/admin/entity-changelog"] = [
+  page.world.fail["GET /api/v1/admin/entity-changelog"] = [
     500,
     "Changelog offline",
   ];
@@ -734,7 +755,7 @@ test("a failed changelog request leaves the page that was showing", async (t) =>
   await page.click("entityChangelogNextBtn");
   const shown = page.texts("#entityChangelogList .card .fw-semibold");
   assert.equal(shown[0], "Change 50");
-  page.world.fail["GET /v1/admin/entity-changelog"] = [
+  page.world.fail["GET /api/v1/admin/entity-changelog"] = [
     500,
     "Changelog offline",
   ];
@@ -880,7 +901,7 @@ test("an empty outbox says so, and refreshing reports a failure", async (t) => {
     "0 pending · 0 failed · 0 rows shown",
   );
   assert.match(page.$("mailTable").textContent, /^Nothing queued\./);
-  page.world.fail["GET /v1/admin/notifications"] = [500, "Outbox offline"];
+  page.world.fail["GET /api/v1/admin/notifications"] = [500, "Outbox offline"];
   await page.click("refreshMailBtn");
   assert.equal(page.$("mailSummary").textContent, "Outbox offline");
 });

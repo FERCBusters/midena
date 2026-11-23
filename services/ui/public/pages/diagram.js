@@ -495,7 +495,7 @@
   }
 
   async function loadTagCatalog() {
-    const data = await api("/v1/tags");
+    const data = await api("/api/v1/tags");
     tagCatalog = data.items || [];
     tagMap = new Map(tagCatalog.map((tag) => [tagKey(tag.name), tag]));
     const datalist = $("#tagSuggestions");
@@ -562,7 +562,7 @@
   }
 
   async function loadFolders() {
-    const data = await api("/v1/folders");
+    const data = await api("/api/v1/folders");
     folders = data.items || [];
     renderFolderSelect();
   }
@@ -973,7 +973,7 @@
     document.querySelectorAll("[data-delete-link]").forEach((btn) =>
       btn.addEventListener("click", async () => {
         try {
-          await api(`/v1/entity-links/${btn.dataset.deleteLink}`, {
+          await api(`/api/v1/entity-links/${btn.dataset.deleteLink}`, {
             method: "DELETE",
           });
           await loadLinks();
@@ -996,7 +996,7 @@
     document.querySelectorAll("[data-resolve-comment]").forEach((btn) =>
       btn.addEventListener("click", async () => {
         try {
-          await api(`/v1/comments/${btn.dataset.resolveComment}`, {
+          await api(`/api/v1/comments/${btn.dataset.resolveComment}`, {
             method: "PATCH",
             body: { is_resolved: btn.dataset.resolved === "1" },
           });
@@ -1009,7 +1009,7 @@
     document.querySelectorAll("[data-delete-comment]").forEach((btn) =>
       btn.addEventListener("click", async () => {
         try {
-          await api(`/v1/comments/${btn.dataset.deleteComment}`, {
+          await api(`/api/v1/comments/${btn.dataset.deleteComment}`, {
             method: "DELETE",
           });
           await loadComments();
@@ -1034,7 +1034,7 @@
     document.querySelectorAll("[data-delete-meta-link]").forEach((btn) =>
       btn.addEventListener("click", async () => {
         try {
-          await api(`/v1/metadata-links/${btn.dataset.deleteMetaLink}`, {
+          await api(`/api/v1/metadata-links/${btn.dataset.deleteMetaLink}`, {
             method: "DELETE",
           });
           await loadMetadataLinks();
@@ -1048,7 +1048,9 @@
   function renderShares() {
     $("#shareCount").textContent = String(shares.length);
     const ownerNote =
-      diagram?.created_by_user_id === me.id ? "You own this diagram." : "";
+      String(diagram?.created_by_user_id ?? "") === String(me.id)
+        ? "You own this diagram."
+        : "";
     $("#shareHelp").textContent = canManageShares
       ? `${ownerNote} Add collaborators for private diagrams, or notify users about public diagrams.`.trim()
       : "Only the diagram author or an administrator can manage sharing permissions.";
@@ -1064,7 +1066,7 @@
     document.querySelectorAll("[data-delete-share]").forEach((btn) =>
       btn.addEventListener("click", async () => {
         try {
-          await api(`/v1/diagram-shares/${btn.dataset.deleteShare}`, {
+          await api(`/api/v1/diagram-shares/${btn.dataset.deleteShare}`, {
             method: "DELETE",
           });
           await loadShares();
@@ -1089,7 +1091,7 @@
       btn.addEventListener("click", async () => {
         try {
           const version = await api(
-            `/v1/diagram-versions/${btn.dataset.version}`,
+            `/api/v1/diagram-versions/${btn.dataset.version}`,
           );
           const source = version.source_text || version.bpmn_xml || "";
           if ((version.diagram_type || "bpmn") === "sequence") {
@@ -1139,7 +1141,7 @@
     if (diagram?.can_delete !== undefined) return Boolean(diagram.can_delete);
     return (
       me?.effective_role === "admin" ||
-      Number(diagram?.created_by_user_id) === Number(me?.id)
+      String(diagram?.created_by_user_id ?? "") === String(me?.id ?? "-")
     );
   }
 
@@ -3882,7 +3884,7 @@
   async function loadAiStatus() {
     if (aiStatus) return aiStatus;
     try {
-      aiStatus = await api("/v1/diagram-ai/status");
+      aiStatus = await api("/api/v1/diagram-ai/status");
     } catch (err) {
       aiStatus = { enabled: false, error: err.message || String(err) };
     }
@@ -3941,7 +3943,7 @@
       '<span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>Asking…';
     try {
       const data = await api(
-        `/v1/diagrams/${encodeURIComponent(id)}/ai/generate`,
+        `/api/v1/diagrams/${encodeURIComponent(id)}/ai/generate`,
         {
           method: "POST",
           body: {
@@ -3993,7 +3995,7 @@
   }
 
   async function loadDiagram() {
-    diagram = await api(`/v1/diagrams/${encodeURIComponent(id)}`);
+    diagram = await api(`/api/v1/diagrams/${encodeURIComponent(id)}`);
     renderDetails();
     setEditorMode(diagram.diagram_type || "bpmn");
     if (isSequence()) {
@@ -4029,13 +4031,15 @@
   }
 
   async function loadVersions() {
-    const data = await api(`/v1/diagrams/${encodeURIComponent(id)}/versions`);
+    const data = await api(
+      `/api/v1/diagrams/${encodeURIComponent(id)}/versions`,
+    );
     renderVersions(data.items || []);
   }
 
   async function loadLinks() {
     const data = await api(
-      `/v1/diagrams/${encodeURIComponent(id)}/entity-links`,
+      `/api/v1/diagrams/${encodeURIComponent(id)}/entity-links`,
     );
     links = data.items || [];
     renderSelection();
@@ -4043,7 +4047,9 @@
   }
 
   async function loadComments() {
-    const data = await api(`/v1/diagrams/${encodeURIComponent(id)}/comments`);
+    const data = await api(
+      `/api/v1/diagrams/${encodeURIComponent(id)}/comments`,
+    );
     comments = data.items || [];
     renderComments();
     applyCommentDecorations();
@@ -4051,14 +4057,14 @@
 
   async function loadMetadataLinks() {
     const data = await api(
-      `/v1/diagrams/${encodeURIComponent(id)}/metadata-links`,
+      `/api/v1/diagrams/${encodeURIComponent(id)}/metadata-links`,
     );
     metadataLinks = data.items || [];
     renderMetadataLinks();
   }
 
   async function loadShares() {
-    const data = await api(`/v1/diagrams/${encodeURIComponent(id)}/shares`);
+    const data = await api(`/api/v1/diagrams/${encodeURIComponent(id)}/shares`);
     shares = data.items || [];
     canManageShares = Boolean(data.can_manage);
     renderShares();
@@ -4096,7 +4102,7 @@
     }
     payload.change_summary =
       prompt("Change summary for this version:", "Updated diagram") || "";
-    const ver = await api(`/v1/diagrams/${encodeURIComponent(id)}/save`, {
+    const ver = await api(`/api/v1/diagrams/${encodeURIComponent(id)}/save`, {
       method: "POST",
       body: payload,
     });
@@ -4687,7 +4693,7 @@
     const format = $("#driveFormat").value || "svg";
     const payload = await buildDriveExportPayload(format);
     const result = await api(
-      `/v1/diagrams/${encodeURIComponent(id)}/export/google-drive`,
+      `/api/v1/diagrams/${encodeURIComponent(id)}/export/google-drive`,
       { method: "POST", body: payload },
     );
     const link = safeHref(result.webViewLink);
@@ -4708,9 +4714,12 @@
       )
     )
       return;
-    const cloned = await api(`/v1/diagrams/${encodeURIComponent(id)}/clone`, {
-      method: "POST",
-    });
+    const cloned = await api(
+      `/api/v1/diagrams/${encodeURIComponent(id)}/clone`,
+      {
+        method: "POST",
+      },
+    );
     toast("Diagram cloned.", "success");
     window.location.href = `/diagram.html?id=${encodeURIComponent(cloned.uuid)}`;
   }
@@ -4776,7 +4785,9 @@
     const query = String(value || "").trim();
     if (query.length < 2) return;
     try {
-      const data = await api(`/v1/users/search?q=${encodeURIComponent(query)}`);
+      const data = await api(
+        `/api/v1/users/search?q=${encodeURIComponent(query)}`,
+      );
       $("#userSuggestions").innerHTML = (data.items || [])
         .map(
           (u) =>
@@ -4793,7 +4804,7 @@
   );
   $("#lockBtn").addEventListener("click", async () => {
     try {
-      await api(`/v1/diagrams/${encodeURIComponent(id)}/lock`, {
+      await api(`/api/v1/diagrams/${encodeURIComponent(id)}/lock`, {
         method: "POST",
         body: { ttl_seconds: 1800 },
       });
@@ -4805,7 +4816,7 @@
   });
   $("#unlockBtn").addEventListener("click", async () => {
     try {
-      await api(`/v1/diagrams/${encodeURIComponent(id)}/lock`, {
+      await api(`/api/v1/diagrams/${encodeURIComponent(id)}/lock`, {
         method: "DELETE",
       });
       toast("Diagram unlocked.", "success");
@@ -4816,7 +4827,7 @@
   });
   $("#saveMetaBtn").addEventListener("click", async () => {
     try {
-      diagram = await api(`/v1/diagrams/${encodeURIComponent(id)}`, {
+      diagram = await api(`/api/v1/diagrams/${encodeURIComponent(id)}`, {
         method: "PATCH",
         body: {
           name: $("#nameInput").value,
@@ -4849,7 +4860,9 @@
     const name = diagram?.name || "this diagram";
     if (!window.confirm(`Delete ${name}? This cannot be undone.`)) return;
     try {
-      await api(`/v1/diagrams/${encodeURIComponent(id)}`, { method: "DELETE" });
+      await api(`/api/v1/diagrams/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
       toast("Diagram deleted.", "success");
       window.location.href = "/index.html";
     } catch (err) {
@@ -4956,7 +4969,7 @@
   $("#commentForm").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     try {
-      await api(`/v1/diagrams/${encodeURIComponent(id)}/comments`, {
+      await api(`/api/v1/diagrams/${encodeURIComponent(id)}/comments`, {
         method: "POST",
         body: {
           body: $("#commentBody").value,
@@ -4977,7 +4990,7 @@
       return;
     }
     try {
-      await api(`/v1/diagrams/${encodeURIComponent(id)}/entity-links`, {
+      await api(`/api/v1/diagrams/${encodeURIComponent(id)}/entity-links`, {
         method: "POST",
         body: {
           element_id: selectedElementId,
@@ -4994,7 +5007,7 @@
   $("#metadataLinkForm").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     try {
-      await api(`/v1/diagrams/${encodeURIComponent(id)}/metadata-links`, {
+      await api(`/api/v1/diagrams/${encodeURIComponent(id)}/metadata-links`, {
         method: "POST",
         body: {
           label: $("#metadataLabel").value,
@@ -5012,7 +5025,7 @@
   $("#shareForm").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     try {
-      await api(`/v1/diagrams/${encodeURIComponent(id)}/shares`, {
+      await api(`/api/v1/diagrams/${encodeURIComponent(id)}/shares`, {
         method: "POST",
         body: {
           identifier: $("#shareIdentifier").value,

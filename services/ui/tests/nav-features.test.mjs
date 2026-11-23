@@ -23,16 +23,44 @@ test("administrators see every link", async (t) => {
   assert.deepEqual(keys(cfg, me), ["diagrams", "folders", "tags", "admin"]);
 });
 
-test("folder managers see folders; viewers see diagrams only", async (t) => {
+test("folder managers see folders; other accounts see diagrams only", async (t) => {
   const cfg = await config(t);
-  for (const role of ["maintainer", "architect", "diagram_admin"]) {
-    const me = cfg.mapMe({ username: role, effective_role: role });
-    assert.deepEqual(keys(cfg, me), ["diagrams", "folders"], role);
+  const managing = cfg.mapMe({
+    username: "manager",
+    effective_role: "normal",
+    permissions: ["diagram.read_private", "folder.manage"],
+  });
+  assert.deepEqual(keys(cfg, managing), ["diagrams", "folders"]);
+  for (const permissions of [[], ["diagram.write", "diagram.comment"], null]) {
+    const me = cfg.mapMe({
+      username: "member",
+      effective_role: "normal",
+      permissions,
+    });
+    assert.deepEqual(keys(cfg, me), ["diagrams"], String(permissions));
   }
-  for (const role of ["viewer", "engineer", "contributor", "product_owner"]) {
-    const me = cfg.mapMe({ username: role, effective_role: role });
-    assert.deepEqual(keys(cfg, me), ["diagrams"], role);
-  }
+  // The flags the pages read follow the permissions too.
+  const writer = cfg.mapMe({
+    effective_role: "normal",
+    permissions: ["diagram.write"],
+  });
+  assert.deepEqual(
+    [writer.can_edit_diagrams, writer.can_comment_diagrams, writer.is_admin],
+    [true, true, false],
+  );
+  const commenter = cfg.mapMe({
+    role: "normal",
+    permissions: ["diagram.comment"],
+  });
+  assert.deepEqual(
+    [
+      commenter.can_edit_diagrams,
+      commenter.can_comment_diagrams,
+      commenter.role,
+    ],
+    [false, true, "normal"],
+  );
+  assert.equal(cfg.mapMe({}).role, "normal");
 });
 
 test("the navigation stays expanded at laptop widths, as in KEEN", async (t) => {

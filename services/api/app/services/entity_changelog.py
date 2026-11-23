@@ -4,10 +4,10 @@ import uuid
 from datetime import datetime
 from typing import Any
 
+from myf.core.datetime_utils import utc_now_naive
 from sqlalchemy import desc, or_
 from sqlalchemy.orm import Session
 
-from app.core.datetime_utils import utc_now_naive
 from app.db.models import Diagram, EntityChangelog, Folder, User
 
 _CHANGE_FIELD_LABELS = {

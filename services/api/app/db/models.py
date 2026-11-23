@@ -3,8 +3,24 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
+from myf.core.datetime_utils import utc_now_naive
+from myf.db.accounts import (
+    AuditLogMixin,
+    GroupMixin,
+    MfaChallengeMixin,
+    MfaCredentialMixin,
+    MfaRecoveryCodeMixin,
+    OidcLoginStateMixin,
+    PermissionMixin,
+    SecurityNotificationMixin,
+    SsoEmailChallengeMixin,
+    UserIdentityMixin,
+    UserLoginIPMixin,
+    UserMixin,
+    UserSsoEmailMixin,
+    association_tables,
+)
 from sqlalchemy import (
-    BigInteger,
     Boolean,
     DateTime,
     ForeignKey,
@@ -17,20 +33,87 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.datetime_utils import utc_now_naive
 from app.db.session import Base
 
 # -----------------------------------------------------------------------------
-# Auth / RBAC
+# Accounts: myf's tables (myf.db.accounts) with MIDENA's additions
 # -----------------------------------------------------------------------------
+
+# Folder and Diagram have a column named uuid, which a class-level annotation
+# would read instead of the module.
+Uuid = uuid.UUID
+
+
+user_groups, user_permissions, group_permissions = association_tables(Base.metadata)
+
+
+class User(Base, UserMixin):
+    preferences: Mapped[UserPreference | None] = relationship(
+        "UserPreference", uselist=False, backref="user", cascade="all, delete-orphan"
+    )
+    shortcuts: Mapped[list["UserShortcut"]] = relationship(
+        "UserShortcut", back_populates="user", cascade="all, delete-orphan"
+    )
+
+
+class Group(Base, GroupMixin):
+    pass
+
+
+class Permission(Base, PermissionMixin):
+    pass
+
+
+class UserIdentity(Base, UserIdentityMixin):
+    pass
+
+
+class OidcLoginState(Base, OidcLoginStateMixin):
+    pass
+
+
+class MfaCredential(Base, MfaCredentialMixin):
+    pass
+
+
+class MfaRecoveryCode(Base, MfaRecoveryCodeMixin):
+    pass
+
+
+class MfaChallenge(Base, MfaChallengeMixin):
+    pass
+
+
+class UserLoginIP(Base, UserLoginIPMixin):
+    pass
+
+
+class SecurityNotification(Base, SecurityNotificationMixin):
+    pass
+
+
+class UserSsoEmail(Base, UserSsoEmailMixin):
+    pass
+
+
+class SsoEmailChallenge(Base, SsoEmailChallengeMixin):
+    pass
+
+
+class AuditLog(Base, AuditLogMixin):
+    """Requests recorded as the audit trail (myf.middleware). Semantic
+    before/after changes are stored separately in EntityChangelog."""
 
 
 class UserPreference(Base):
     __tablename__ = "user_preferences"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False
+    user_id: Mapped[Uuid] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        unique=True,
+        nullable=False,
     )
 
     # Theme palette id from the shared design system; empty means the
@@ -62,248 +145,15 @@ class UserPreference(Base):
     )
 
 
-class User(Base):
-    __tablename__ = "users"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    username: Mapped[str] = mapped_column(
-        String(160), unique=True, index=True, nullable=False
-    )
-    email: Mapped[str | None] = mapped_column(
-        String(255), unique=True, index=True, nullable=True
-    )
-    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
-
-    # One of roles.py roles.
-    role: Mapped[str] = mapped_column(String(50), default="viewer", nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-
-    # Local second factor: enabled means local sign-in needs the ceremony.
-    # Every change to the enrolment bumps mfa_version, and a session whose
-    # recorded version no longer matches is refused at resolution, so the
-    # browser's other sessions end with the change. Wrong TOTP and recovery
-    # codes are counted across sign-ins from mfa_code_failures_since; see
-    # app/security/mfa.py.
-    mfa_enabled: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False, server_default="false"
-    )
-    mfa_version: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0, server_default="0"
-    )
-    mfa_totp_secret: Mapped[str | None] = mapped_column(Text, nullable=True)
-    mfa_totp_last_step: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=-1, server_default="-1"
-    )
-    mfa_code_failures: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0, server_default="0"
-    )
-    mfa_code_failures_since: Mapped[datetime | None] = mapped_column(
-        DateTime, nullable=True
-    )
-
-    last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=utc_now_naive, nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False
-    )
-
-    preferences: Mapped[UserPreference | None] = relationship(
-        "UserPreference", uselist=False, backref="user", cascade="all, delete-orphan"
-    )
-
-    shortcuts: Mapped[list["UserShortcut"]] = relationship(
-        "UserShortcut", back_populates="user", cascade="all, delete-orphan"
-    )
-
-
-class Session(Base):
-    __tablename__ = "sessions"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    session_id: Mapped[str] = mapped_column(
-        String(255), unique=True, index=True, nullable=False
-    )
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=utc_now_naive, nullable=False
-    )
-    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-
-    # How the session was created. Used to decide whether logout should trigger
-    # RP-initiated logout (OIDC) or just clear the local session.
-    auth_method: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="local"
-    )
-
-    # The second-factor state this session was issued with: a session proves
-    # the factor only when its recorded enrolment version matches the
-    # account's and the ceremony completed. See local_session_allowed in
-    # app/security/mfa.py.
-    mfa_verified: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False, server_default="false"
-    )
-    mfa_version: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0, server_default="0"
-    )
-
-    # Optional: store the last OIDC id_token for this session so we can pass
-    # id_token_hint to the provider's end_session endpoint (if configured).
-    oidc_id_token: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-
-class MfaCredential(Base):
-    """A registered WebAuthn security key or passkey."""
-
-    __tablename__ = "mfa_credentials"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    credential_id: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
-    public_key: Mapped[str] = mapped_column(Text, nullable=False)
-    sign_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
-    name: Mapped[str] = mapped_column(String(100), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=utc_now_naive, nullable=False
-    )
-    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-
-
-class MfaRecoveryCode(Base):
-    """One-time recovery codes, stored hashed."""
-
-    __tablename__ = "mfa_recovery_codes"
-
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
-    )
-    code_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
-
-
-class MfaChallenge(Base):
-    """A pending second-factor ceremony, never part of the session namespace.
-
-    The browser holds only the unhashed token; the row is looked up by the
-    token's SHA-256 digest and carries the account state it was issued for.
-    """
-
-    __tablename__ = "mfa_challenges"
-
-    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    purpose: Mapped[str] = mapped_column(String(16), nullable=False)
-    stage: Mapped[str] = mapped_column(String(16), nullable=False)
-    version: Mapped[int] = mapped_column(Integer, nullable=False)
-    password_digest: Mapped[str] = mapped_column(String(64), nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
-    data: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-
-
-# -----------------------------------------------------------------------------
-# External identities (OIDC)
-# -----------------------------------------------------------------------------
-
-
-class UserIdentity(Base):
-    __tablename__ = "user_identities"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-
-    # Provider type, e.g. "oidc"
-    provider: Mapped[str] = mapped_column(String(40), nullable=False, default="oidc")
-    issuer: Mapped[str] = mapped_column(String(500), nullable=False)
-    subject: Mapped[str] = mapped_column(String(255), nullable=False)
-
-    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    preferred_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-
-    claims: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=utc_now_naive, nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False
-    )
-
-    __table_args__ = (
-        UniqueConstraint("issuer", "subject", name="uq_user_identity_issuer_subject"),
-    )
-
-
-class UserSsoEmail(Base):
-    """An address whose mailbox the account has proved, for SSO linking.
-
-    Ported from KEEN: an identity provider that reports one of these addresses
-    as verified links its identity to the account at the first sign-in.
-    """
-
-    __tablename__ = "user_sso_emails"
-
-    email: Mapped[str] = mapped_column(String(256), primary_key=True)
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    verified_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=utc_now_naive
-    )
-
-
-class SsoEmailChallenge(Base):
-    """The one outstanding mailbox proof an account has requested.
-
-    It holds a digest of the e-mailed token and the account's password and
-    second-factor state when it was requested, so a change to either ends it.
-    """
-
-    __tablename__ = "sso_email_challenges"
-
-    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    email: Mapped[str] = mapped_column(String(256), nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    mfa_version: Mapped[int] = mapped_column(Integer, nullable=False)
-    password_digest: Mapped[str] = mapped_column(String(64), nullable=False)
-
-
-class OidcLoginState(Base):
-    __tablename__ = "oidc_login_states"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    state: Mapped[str] = mapped_column(
-        String(255), unique=True, index=True, nullable=False
-    )
-    nonce: Mapped[str] = mapped_column(String(255), nullable=False)
-    code_verifier: Mapped[str] = mapped_column(String(255), nullable=False)
-
-    next_url: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=utc_now_naive, nullable=False
-    )
-    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-
-
 class UserShortcut(Base):
     __tablename__ = "user_shortcuts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    user_id: Mapped[Uuid] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
 
     name: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -323,84 +173,6 @@ class UserShortcut(Base):
     )
 
 
-class Group(Base):
-    __tablename__ = "groups"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    name: Mapped[str] = mapped_column(
-        String(200), unique=True, index=True, nullable=False
-    )
-
-    # Optional group role (used in role inheritance).
-    role: Mapped[str | None] = mapped_column(String(50), nullable=True)
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=utc_now_naive, nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False
-    )
-
-    # Optional human-friendly description shown in the admin UI.
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-
-class UserGroup(Base):
-    __tablename__ = "user_groups"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
-    )
-    group_id: Mapped[int] = mapped_column(
-        ForeignKey("groups.id", ondelete="CASCADE"), nullable=False
-    )
-
-    __table_args__ = (UniqueConstraint("user_id", "group_id", name="uq_user_group"),)
-
-
-class Permission(Base):
-    __tablename__ = "permissions"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    code: Mapped[str] = mapped_column(
-        String(120), unique=True, index=True, nullable=False
-    )
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-
-class UserPermission(Base):
-    __tablename__ = "user_permissions"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
-    )
-    permission_id: Mapped[int] = mapped_column(
-        ForeignKey("permissions.id", ondelete="CASCADE"), nullable=False
-    )
-
-    __table_args__ = (
-        UniqueConstraint("user_id", "permission_id", name="uq_user_permission"),
-    )
-
-
-class GroupPermission(Base):
-    __tablename__ = "group_permissions"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    group_id: Mapped[int] = mapped_column(
-        ForeignKey("groups.id", ondelete="CASCADE"), nullable=False
-    )
-    permission_id: Mapped[int] = mapped_column(
-        ForeignKey("permissions.id", ondelete="CASCADE"), nullable=False
-    )
-
-    __table_args__ = (
-        UniqueConstraint("group_id", "permission_id", name="uq_group_permission"),
-    )
-
-
 # -----------------------------------------------------------------------------
 # MIDENA diagram domain
 # -----------------------------------------------------------------------------
@@ -410,7 +182,7 @@ class Folder(Base):
     __tablename__ = "folders"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    uuid: Mapped[uuid.UUID] = mapped_column(
+    uuid: Mapped[Uuid] = mapped_column(
         UUID(as_uuid=True), unique=True, index=True, default=uuid.uuid4, nullable=False
     )
     parent_id: Mapped[int | None] = mapped_column(
@@ -420,8 +192,8 @@ class Folder(Base):
     slug: Mapped[str | None] = mapped_column(String(200), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    created_by_user_id: Mapped[int | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    created_by_user_id: Mapped[Uuid | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=utc_now_naive, nullable=False
@@ -461,7 +233,7 @@ class Diagram(Base):
     __tablename__ = "diagrams"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    uuid: Mapped[uuid.UUID] = mapped_column(
+    uuid: Mapped[Uuid] = mapped_column(
         UUID(as_uuid=True), unique=True, index=True, default=uuid.uuid4, nullable=False
     )
     public_token: Mapped[str] = mapped_column(
@@ -487,11 +259,14 @@ class Diagram(Base):
     current_version_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     header_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     footer_text: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_by_user_id: Mapped[int | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    created_by_user_id: Mapped[Uuid | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
-    updated_by_user_id: Mapped[int | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    updated_by_user_id: Mapped[Uuid | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=utc_now_naive, nullable=False
@@ -538,8 +313,8 @@ class DiagramVersion(Base):
     flowchart_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     svg_xml: Mapped[str | None] = mapped_column(Text, nullable=True)
     change_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_by_user_id: Mapped[int | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    created_by_user_id: Mapped[Uuid | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=utc_now_naive, nullable=False, index=True
@@ -564,8 +339,11 @@ class DiagramLock(Base):
         nullable=False,
         index=True,
     )
-    user_id: Mapped[int | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    user_id: Mapped[Uuid | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     locked_at: Mapped[datetime] = mapped_column(
         DateTime, default=utc_now_naive, nullable=False
@@ -587,8 +365,11 @@ class DiagramComment(Base):
     diagram_id: Mapped[int] = mapped_column(
         ForeignKey("diagrams.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    user_id: Mapped[int | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    user_id: Mapped[Uuid | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     element_id: Mapped[str | None] = mapped_column(
         String(255), nullable=True, index=True
@@ -619,8 +400,8 @@ class DiagramEntityLink(Base):
     label: Mapped[str | None] = mapped_column(String(512), nullable=True)
     url: Mapped[str | None] = mapped_column(Text, nullable=True)
     metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    created_by_user_id: Mapped[int | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    created_by_user_id: Mapped[Uuid | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=utc_now_naive, nullable=False
@@ -652,8 +433,8 @@ class DiagramMetadataLink(Base):
     label: Mapped[str] = mapped_column(String(512), nullable=False)
     url: Mapped[str] = mapped_column(Text, nullable=False)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_by_user_id: Mapped[int | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    created_by_user_id: Mapped[Uuid | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=utc_now_naive, nullable=False
@@ -673,12 +454,15 @@ class DiagramShare(Base):
     diagram_id: Mapped[int] = mapped_column(
         ForeignKey("diagrams.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    user_id: Mapped[Uuid] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
     role: Mapped[str] = mapped_column(String(32), nullable=False, default="viewer")
-    created_by_user_id: Mapped[int | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    created_by_user_id: Mapped[Uuid | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=utc_now_naive, nullable=False
@@ -705,8 +489,8 @@ class GlobalDiagramChrome(Base):
     header_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     footer_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     theme_settings: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    updated_by_user_id: Mapped[int | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    updated_by_user_id: Mapped[Uuid | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False
@@ -716,67 +500,6 @@ class GlobalDiagramChrome(Base):
 # -----------------------------------------------------------------------------
 # Cross-cutting
 # -----------------------------------------------------------------------------
-
-
-class RateLimitEntry(Base):
-    __tablename__ = "rate_limit_entries"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    identifier: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
-    timestamp: Mapped[datetime] = mapped_column(
-        DateTime, default=utc_now_naive, nullable=False, index=True
-    )
-
-
-class LoginThrottle(Base):
-    """Consecutive password failures from unrecognised browsers, per compared
-    username digest (app/security/sign_in_throttle.py)."""
-
-    __tablename__ = "login_throttles"
-
-    name_key: Mapped[str] = mapped_column(String(64), primary_key=True)
-    failures: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    gate_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    last_failure_at: Mapped[datetime] = mapped_column(
-        DateTime, default=utc_now_naive, nullable=False, index=True
-    )
-
-
-class LoginDevice(Base):
-    """A browser that has proved an account's password: its hashed device
-    cookie, bound to the username it signed in with."""
-
-    __tablename__ = "login_devices"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    name_key: Mapped[str] = mapped_column(String(64), nullable=False)
-    failures: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=utc_now_naive, nullable=False
-    )
-    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
-
-
-class UserLoginIP(Base):
-    """An address an account has completed a sign-in from.
-
-    Ported from KEEN: a sign-in from an address not yet listed mails the
-    account a security notice. Rows are kept until the account is deleted.
-    """
-
-    __tablename__ = "user_login_ips"
-
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
-    )
-    address: Mapped[str] = mapped_column(String(45), primary_key=True)
-    first_seen_at: Mapped[datetime] = mapped_column(
-        DateTime, default=utc_now_naive, nullable=False
-    )
 
 
 class ManagedConfiguration(Base):
@@ -791,8 +514,8 @@ class ManagedConfiguration(Base):
     name: Mapped[str] = mapped_column(String(64), primary_key=True)
     document: Mapped[dict] = mapped_column(JSONB, nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    updated_by: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    updated_by: Mapped[Uuid | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False
@@ -808,43 +531,14 @@ class ManagedConfigurationRevision(Base):
     name: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     document: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    updated_by: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    updated_by: Mapped[Uuid | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=utc_now_naive, nullable=False
     )
 
     __table_args__ = (UniqueConstraint("name", "version"),)
-
-
-class AuditLog(Base):
-    """Record UI/API requests as an internal audit trail.
-
-    This intentionally mirrors KEEN's request-level audit log shape. Semantic
-    before/after business changes are stored separately in EntityChangelog.
-    """
-
-    __tablename__ = "audit_logs"
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    ts: Mapped[datetime] = mapped_column(
-        DateTime, default=utc_now_naive, nullable=False, index=True
-    )
-
-    username: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
-    method: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
-    path: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
-    query_string: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    status_code: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False)
-
-    client_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    user_agent: Mapped[str | None] = mapped_column(String(256), nullable=True)
-    referer: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
 
 class Notification(Base):
@@ -859,11 +553,14 @@ class Notification(Base):
 
     __tablename__ = "notifications"
 
-    id: Mapped[uuid.UUID] = mapped_column(
+    id: Mapped[Uuid] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    user_id: Mapped[int | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    user_id: Mapped[Uuid | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     recipient: Mapped[str] = mapped_column(String(255), nullable=False)
     subject: Mapped[str] = mapped_column(String(500), nullable=False)
@@ -891,7 +588,7 @@ class EntityChangelog(Base):
 
     __tablename__ = "entity_changelogs"
 
-    id: Mapped[uuid.UUID] = mapped_column(
+    id: Mapped[Uuid] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     entity_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
@@ -906,8 +603,11 @@ class EntityChangelog(Base):
     after_state: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     changes: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
 
-    changed_by_user_id: Mapped[int | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    changed_by_user_id: Mapped[Uuid | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     changed_by_username: Mapped[str | None] = mapped_column(
         String(128), nullable=True, index=True

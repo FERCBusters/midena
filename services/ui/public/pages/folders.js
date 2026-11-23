@@ -160,7 +160,7 @@
   }
 
   async function load() {
-    const data = await api("/v1/folders");
+    const data = await api("/api/v1/folders");
     folders = data.items || [];
     renderTree();
     renderTable();
@@ -179,7 +179,7 @@
     const folder = folders.find((f) => f.id === folderId);
     if (!folder || (folder.parent_id || null) === (parentId || null)) return;
     try {
-      await api(`/v1/folders/${folderId}`, {
+      await api(`/api/v1/folders/${folderId}`, {
         method: "PATCH",
         body: { parent_id: parentId },
       });
@@ -210,7 +210,7 @@
     )
       return;
     try {
-      await api(`/v1/folders/${id}`, { method: "DELETE" });
+      await api(`/api/v1/folders/${id}`, { method: "DELETE" });
       toast("Folder deleted.", "success");
       await load();
     } catch (err) {
@@ -239,7 +239,7 @@
         description: document.getElementById("folderDescription").value,
       };
       try {
-        await api(id ? `/v1/folders/${id}` : "/v1/folders", {
+        await api(id ? `/api/v1/folders/${id}` : "/api/v1/folders", {
           method: id ? "PATCH" : "POST",
           body,
         });

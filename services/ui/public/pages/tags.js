@@ -61,7 +61,7 @@
   }
 
   async function loadTags() {
-    const data = await api("/v1/tags");
+    const data = await api("/api/v1/tags");
     tags = data.items || [];
     renderRows();
   }
@@ -73,7 +73,7 @@
       toast("Tag name must not be empty.", "warning");
       return;
     }
-    await api(`/v1/tags/${id}`, { method: "PATCH", body: { name, color } });
+    await api(`/api/v1/tags/${id}`, { method: "PATCH", body: { name, color } });
     toast("Tag saved.", "success");
     await loadTags();
   }
@@ -92,7 +92,7 @@
         return;
       }
       try {
-        await api("/v1/tags", { method: "POST", body: { name, color } });
+        await api("/api/v1/tags", { method: "POST", body: { name, color } });
         toast("Tag added.", "success");
         document.getElementById("newTagForm").reset();
         document.getElementById("newTagColor").value = randomColour();

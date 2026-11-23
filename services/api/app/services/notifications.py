@@ -10,13 +10,14 @@ secrets and never linger in the database.
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
+from myf.core.datetime_utils import utc_now_naive
+from myf.services.mailer import send_email, smtp_configured
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
-from app.core.datetime_utils import utc_now_naive
 from app.db.models import Notification
 
 log = logging.getLogger(__name__)
@@ -26,12 +27,6 @@ _MAX_ATTEMPTS = 8
 _RETENTION_DAYS = 30
 
 
-def smtp_configured() -> bool:
-    return bool((settings.smtp_host or "").strip()) and bool(
-        (settings.smtp_from_email or "").strip()
-    )
-
-
 def _now() -> datetime:
     return utc_now_naive()
 
@@ -39,7 +34,7 @@ def _now() -> datetime:
 def queue_email(
     db: Session,
     *,
-    user_id: int | None,
+    user_id: uuid.UUID | None,
     recipient: str,
     subject: str,
     body: str,
@@ -66,7 +61,6 @@ def deliver_pending(limit: int = 10) -> int:
     """Drain the outbox: one SMTP send per pending row, backoff on failure."""
 
     from app.db.session import SessionLocal
-    from app.services.mailer import send_email
 
     if not smtp_configured():
         return 0
@@ -125,7 +119,7 @@ def deliver_pending(limit: int = 10) -> int:
 
 
 def notification_snapshot(
-    db: Session, *, user_id: int, limit: int = 20
+    db: Session, *, user_id: uuid.UUID, limit: int = 20
 ) -> list[dict[str, Any]]:
     """The user's own outbox history: what was mailed to them and when.
 
@@ -153,3 +147,48 @@ def notification_snapshot(
         }
         for row in rows
     ]
+
+
+def single_line(text: str | None) -> str:
+    """Header text on one line.
+
+    A message header refuses every character str.splitlines() breaks at (CR,
+    LF, VT, FF, the separators FS, GS and RS, NEL, and the Unicode line and
+    paragraph separators), and a refused subject fails the mail on every
+    attempt, so a name that carries one is flattened here.
+    """
+    return " ".join(str(text or "").splitlines()) if text else ""
+
+
+def send_diagram_share_email(
+    *,
+    db: Session,
+    user_id: uuid.UUID | None,
+    to_email: str,
+    diagram_name: str,
+    shared_by: str,
+    diagram_url: str | None,
+    role: str,
+) -> None:
+    """Queue a diagram sharing notice in the caller's transaction.
+
+    The link comes from MIDENA_PUBLIC_BASE_URL, never from a request's Host
+    header, which a client chooses.
+    """
+    from myf.services.mailer import sender_name
+
+    body = (
+        "Hello,\n\n"
+        f"{single_line(shared_by)} shared the MIDENA diagram "
+        f"'{single_line(diagram_name)}' with you as a {role}.\n\n"
+    )
+    if diagram_url:
+        body += f"Open the diagram: {diagram_url}\n\n"
+    body += "You are receiving this because you have an account on this MIDENA.\n"
+    queue_email(
+        db,
+        user_id=user_id,
+        recipient=to_email,
+        subject=f"{sender_name()}: a diagram was shared with you",
+        body=body,
+    )

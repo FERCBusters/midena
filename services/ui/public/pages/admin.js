@@ -39,7 +39,7 @@
   async function loadOutbox() {
     if (!el.mailTable) return;
     try {
-      const body = await MIDENA.api("/v1/admin/notifications");
+      const body = await MIDENA.api("/api/v1/admin/notifications");
       el.mailSummary.textContent = `${body.pending} pending · ${body.failed} failed · ${body.notifications.length} rows shown`;
       if (!body.notifications.length) {
         el.mailTable.innerHTML =
@@ -72,17 +72,10 @@
   }
 
   function roleOptions(selected) {
-    const roles = [
-      "viewer",
-      "engineer",
-      "contributor",
-      "product_owner",
-      "architect",
-      "maintainer",
-      "diagram_admin",
-      "admin",
-      "inherit",
-    ];
+    // Administrators, ordinary accounts, and accounts that take their role
+    // from their groups; what an ordinary account may do comes from its
+    // permissions.
+    const roles = ["normal", "admin", "inherit"];
     return roles
       .map(
         (r) =>
@@ -240,7 +233,7 @@
     });
     let data;
     try {
-      data = await MIDENA.api(`/v1/admin/audit?${params.toString()}`);
+      data = await MIDENA.api(`/api/v1/admin/audit?${params.toString()}`);
     } catch (err) {
       renderAuditTrail();
       throw err;
@@ -317,7 +310,7 @@
     let data;
     try {
       data = await MIDENA.api(
-        `/v1/admin/entity-changelog?${params.toString()}`,
+        `/api/v1/admin/entity-changelog?${params.toString()}`,
       );
     } catch (err) {
       renderEntityChangelog();
@@ -372,17 +365,17 @@
   }
 
   async function loadUsers() {
-    const data = await MIDENA.api("/v1/admin/users");
+    const data = await MIDENA.api("/api/v1/admin/users");
     state.users = Array.isArray(data?.items) ? data.items : [];
   }
 
   async function loadGroups() {
-    const data = await MIDENA.api("/v1/admin/groups");
+    const data = await MIDENA.api("/api/v1/admin/groups");
     state.groups = Array.isArray(data?.items) ? data.items : [];
   }
 
   async function loadPermissions() {
-    const data = await MIDENA.api("/v1/admin/permissions");
+    const data = await MIDENA.api("/api/v1/admin/permissions");
     state.permissions = Array.isArray(data?.items) ? data.items : [];
   }
 
@@ -411,7 +404,7 @@
       <div class="card mt-2">
         <div class="card-body p-3">
           <div class="d-flex align-items-center justify-content-between mb-2">
-            <div class="fw-semibold">Edit access for user #${userId}</div>
+            <div class="fw-semibold">Edit access</div>
             <button type="button" class="btn btn-sm btn-outline-secondary" data-action="cancel-user-access">Close</button>
           </div>
           <div class="row g-3">
@@ -438,7 +431,7 @@
       .map((u) => {
         const username = MIDENA.escapeHtml(u.username);
         const role = String(u.role || "inherit");
-        const effective = MIDENA.escapeHtml(u.effective_role || "viewer");
+        const effective = MIDENA.escapeHtml(u.effective_role || "normal");
         const disableSelfToggle =
           MIDENA.state.me?.id === u.id ? "disabled" : "";
         const disableSelfDelete =
@@ -513,7 +506,7 @@
       <div class="card mt-2">
         <div class="card-body p-3">
           <div class="d-flex align-items-center justify-content-between mb-2">
-            <div class="fw-semibold">Edit permissions for group #${groupId}</div>
+            <div class="fw-semibold">Edit group permissions</div>
             <button type="button" class="btn btn-sm btn-outline-secondary" data-action="cancel-group-perms">Close</button>
           </div>
           <div style="max-height:240px;overflow:auto;">${checks || '<span class="small text-muted">No permissions</span>'}</div>
@@ -541,12 +534,7 @@
             <td>
               <select class="form-select form-select-sm" data-field="group-role" data-group-id="${g.id}">
                 <option value="" ${!g.role ? "selected" : ""}>(no role)</option>
-                <option value="viewer" ${g.role === "viewer" ? "selected" : ""}>viewer</option>
-                <option value="engineer" ${g.role === "engineer" ? "selected" : ""}>engineer</option>
-                <option value="contributor" ${g.role === "contributor" ? "selected" : ""}>contributor</option>
-                <option value="product_owner" ${g.role === "product_owner" ? "selected" : ""}>product_owner</option>
-                <option value="architect" ${g.role === "architect" ? "selected" : ""}>architect</option>
-                <option value="maintainer" ${g.role === "maintainer" ? "selected" : ""}>maintainer</option>
+                <option value="normal" ${g.role === "normal" ? "selected" : ""}>normal</option>
                 <option value="admin" ${g.role === "admin" ? "selected" : ""}>admin</option>
               </select>
             </td>
@@ -599,10 +587,10 @@
       username: String(fd.get("username") || "").trim(),
       email: String(fd.get("email") || "").trim() || null,
       password: String(fd.get("password") || ""),
-      role: String(fd.get("role") || "viewer"),
+      role: String(fd.get("role") || "normal"),
     };
 
-    await MIDENA.api("/v1/admin/users", { method: "POST", body: payload });
+    await MIDENA.api("/api/v1/admin/users", { method: "POST", body: payload });
     form.reset();
     setMessage("User created.", "success");
     await refreshAll();
@@ -615,7 +603,7 @@
       role: String(fd.get("role") || "").trim() || null,
     };
 
-    await MIDENA.api("/v1/admin/groups", { method: "POST", body: payload });
+    await MIDENA.api("/api/v1/admin/groups", { method: "POST", body: payload });
     form.reset();
     setMessage("Group created.", "success");
     await refreshAll();
@@ -626,7 +614,7 @@
     if (!button) return;
 
     const action = button.dataset.action;
-    const userId = Number(button.dataset.userId || 0);
+    const userId = String(button.dataset.userId || "");
 
     if (action === "save-user" && userId) {
       const emailEl = el.usersTable.querySelector(
@@ -640,25 +628,25 @@
       );
       // An empty address clears the account's email, as in KEEN.
       const payload = {
-        role: roleEl?.value || "viewer",
+        role: roleEl?.value || "normal",
         is_active: Boolean(activeEl?.checked),
         email: String(emailEl?.value || "").trim(),
       };
-      await MIDENA.api(`/v1/admin/users/${userId}`, {
+      await MIDENA.api(`/api/v1/admin/users/${userId}`, {
         method: "PATCH",
         body: payload,
       });
-      setMessage(`User #${userId} updated.`, "success");
+      setMessage("User updated.", "success");
       await refreshAll();
       return;
     }
 
     if (action === "reset-password" && userId) {
-      const target = state.users.find((x) => Number(x.id) === Number(userId));
-      const label = target?.username || `#${userId}`;
+      const target = state.users.find((x) => String(x.id) === userId);
+      const label = target?.username || "this user";
       const password = window.prompt(`Set a new password for ${label}:`);
       if (!password) return;
-      await MIDENA.api(`/v1/admin/users/${userId}/password`, {
+      await MIDENA.api(`/api/v1/admin/users/${userId}/password`, {
         method: "POST",
         body: { new_password: password },
       });
@@ -667,15 +655,15 @@
     }
 
     if (action === "delete-user" && userId) {
-      const target = state.users.find((x) => Number(x.id) === Number(userId));
-      const label = target?.username ? `“${target.username}”` : `#${userId}`;
+      const target = state.users.find((x) => String(x.id) === userId);
+      const label = target?.username ? `“${target.username}”` : "this user";
       if (
         !window.confirm(
           `Delete user ${label}? This is permanent and will remove their sessions, preferences, shortcuts, and question posts.`,
         )
       )
         return;
-      await MIDENA.api(`/v1/admin/users/${userId}`, { method: "DELETE" });
+      await MIDENA.api(`/api/v1/admin/users/${userId}`, { method: "DELETE" });
       setMessage(`User ${label} deleted.`, "success");
       await refreshAll();
       return;
@@ -683,7 +671,7 @@
 
     if (action === "edit-user-access" && userId) {
       state.editingUserAccess = await MIDENA.api(
-        `/v1/admin/users/${userId}/access`,
+        `/api/v1/admin/users/${userId}/access`,
       );
       renderUsers();
       return;
@@ -699,11 +687,11 @@
       const panel = button.closest(".card");
       const groupIds = Array.from(
         panel.querySelectorAll('input[data-kind="group"]:checked'),
-      ).map((cb) => Number(cb.value));
+      ).map((cb) => String(cb.value));
       const permissionIds = Array.from(
         panel.querySelectorAll('input[data-kind="perm"]:checked'),
-      ).map((cb) => Number(cb.value));
-      await MIDENA.api(`/v1/admin/users/${userId}/access`, {
+      ).map((cb) => String(cb.value));
+      await MIDENA.api(`/api/v1/admin/users/${userId}/access`, {
         method: "PUT",
         body: {
           group_ids: groupIds,
@@ -711,7 +699,7 @@
         },
       });
       state.editingUserAccess = null;
-      setMessage(`Access updated for user #${userId}.`, "success");
+      setMessage("Access updated.", "success");
       await refreshAll();
     }
   }
@@ -721,7 +709,7 @@
     if (!button) return;
 
     const action = button.dataset.action;
-    const groupId = Number(button.dataset.groupId || 0);
+    const groupId = String(button.dataset.groupId || "");
 
     if (action === "save-group" && groupId) {
       const roleEl = el.groupsTable.querySelector(
@@ -733,7 +721,7 @@
       const descEl = el.groupsTable.querySelector(
         `input[data-field="group-description"][data-group-id="${groupId}"]`,
       );
-      await MIDENA.api(`/v1/admin/groups/${groupId}`, {
+      await MIDENA.api(`/api/v1/admin/groups/${groupId}`, {
         method: "PATCH",
         body: {
           name: String(nameEl?.value || "").trim(),
@@ -741,21 +729,21 @@
           role: String(roleEl?.value || "").trim() || null,
         },
       });
-      setMessage(`Group #${groupId} updated.`, "success");
+      setMessage("Group updated.", "success");
       await refreshAll();
       return;
     }
 
     if (action === "delete-group" && groupId) {
-      const target = state.groups.find((x) => Number(x.id) === Number(groupId));
-      const label = target?.name ? `“${target.name}”` : `#${groupId}`;
+      const target = state.groups.find((x) => String(x.id) === groupId);
+      const label = target?.name ? `“${target.name}”` : "this group";
       if (
         !window.confirm(
           `Delete group ${label}? This is permanent and will remove its memberships and permissions.`,
         )
       )
         return;
-      await MIDENA.api(`/v1/admin/groups/${groupId}`, { method: "DELETE" });
+      await MIDENA.api(`/api/v1/admin/groups/${groupId}`, { method: "DELETE" });
       setMessage(`Group ${label} deleted.`, "success");
       await refreshAll();
       return;
@@ -763,7 +751,7 @@
 
     if (action === "edit-group-perms" && groupId) {
       state.editingGroupPerms = await MIDENA.api(
-        `/v1/admin/groups/${groupId}/permissions`,
+        `/api/v1/admin/groups/${groupId}/permissions`,
       );
       renderGroups();
       return;
@@ -779,13 +767,13 @@
       const panel = button.closest(".card");
       const permissionIds = Array.from(
         panel.querySelectorAll('input[data-kind="perm"]:checked'),
-      ).map((cb) => Number(cb.value));
-      await MIDENA.api(`/v1/admin/groups/${groupId}/permissions`, {
+      ).map((cb) => String(cb.value));
+      await MIDENA.api(`/api/v1/admin/groups/${groupId}/permissions`, {
         method: "PUT",
         body: { permission_ids: permissionIds },
       });
       state.editingGroupPerms = null;
-      setMessage(`Permissions updated for group #${groupId}.`, "success");
+      setMessage("Group permissions updated.", "success");
       await refreshAll();
     }
   }
