@@ -15,7 +15,9 @@ from fastapi.responses import Response
 from mosp import host
 from mosp.api.routing import Router
 from mosp.core.datetime_utils import utc_now_naive
+from mosp.core.identifiers import try_uuid
 from mosp.core.valkey import get_valkey
+from mosp.security.auth import require_admin, require_authenticated
 from mosp.security.permissions import has_permission
 from mosp.security.rate_limit import sliding_window_allow
 from mosp.security.roles import ROLE_ADMIN, attach_effective_role
@@ -25,7 +27,7 @@ from sqlalchemy import String, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.deps import DB_INT_MAX, DbId, PageLimit, PageOffset, get_request_user
+from app.api.deps import DB_INT_MAX, DbId, PageLimit, PageOffset
 from app.api.downloads import attachment_media_type, content_disposition_attachment
 from app.api.payloads import (
     DiagramAIGeneratePayload,
@@ -252,11 +254,6 @@ def _replace_tag_on_diagrams(db: Session, old_name: str, new_name: str) -> int:
     if changed:
         db.flush()
     return changed
-
-
-def _require_admin_role(db: Session, user: User) -> None:
-    if _effective_role(db, user) != ROLE_ADMIN:
-        raise HTTPException(status_code=403, detail="Admin access required")
 
 
 # ---------------------------------------------------------------------------
@@ -617,11 +614,12 @@ def _can_write_diagram(db: Session, diagram: Diagram, user: User) -> bool:
 
 
 def _parse_diagram_uuid(diagram_ref: str) -> uuid.UUID:
-    """Diagrams are addressed by UUID only; anything else names no diagram."""
-    try:
-        return uuid.UUID(diagram_ref)
-    except ValueError:
-        raise HTTPException(status_code=404, detail="Diagram not found") from None
+    """Diagrams are addressed by UUID only, in its one spelling (try_uuid);
+    anything else names no diagram."""
+    parsed = try_uuid(diagram_ref)
+    if parsed is None:
+        raise HTTPException(status_code=404, detail="Diagram not found")
+    return parsed
 
 
 def _get_public_diagram(db: Session, diagram_uuid: str, public_token: str) -> Diagram:
@@ -981,7 +979,9 @@ def _version_to_dict(row: DiagramVersion, *, include_xml: bool = False) -> dict:
 
 
 @router.get("/v1/folders")
-def list_folders(_: User = Depends(get_request_user), db: Session = Depends(get_db)):
+def list_folders(
+    _: User = Depends(require_authenticated), db: Session = Depends(get_db)
+):
     rows = (
         db.query(Folder)
         .order_by(
@@ -998,7 +998,7 @@ def list_folders(_: User = Depends(get_request_user), db: Session = Depends(get_
 def create_folder(
     payload: FolderCreatePayload,
     request: Request,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     _require_perm(db, user, PERM_FOLDER_MANAGE, "Folder management")
@@ -1034,7 +1034,7 @@ def update_folder(
     folder_id: DbId,
     payload: FolderUpdatePayload,
     request: Request,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     _require_perm(db, user, PERM_FOLDER_MANAGE, "Folder management")
@@ -1083,7 +1083,7 @@ def update_folder(
 def delete_folder(
     folder_id: DbId,
     request: Request,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     _require_perm(db, user, PERM_FOLDER_MANAGE, "Folder management")
@@ -1119,7 +1119,7 @@ def list_diagrams(
     tags: Annotated[str | None, Query(max_length=2000)] = None,
     limit: PageLimit = 50,
     offset: PageOffset = 0,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     qry = _diagram_query_for_user(db, user)
@@ -1166,7 +1166,7 @@ def list_diagrams(
 
 @router.get("/v1/diagram-tags")
 def diagram_tag_cloud(
-    user: User = Depends(get_request_user), db: Session = Depends(get_db)
+    user: User = Depends(require_authenticated), db: Session = Depends(get_db)
 ):
     rows = _diagram_query_for_user(db, user).all()
     counts, labels = _diagram_tag_counts(rows)
@@ -1186,7 +1186,9 @@ def diagram_tag_cloud(
 
 
 @router.get("/v1/tags")
-def list_tags(user: User = Depends(get_request_user), db: Session = Depends(get_db)):
+def list_tags(
+    user: User = Depends(require_authenticated), db: Session = Depends(get_db)
+):
     visible_rows = _diagram_query_for_user(db, user).all()
     counts, _ = _diagram_tag_counts(visible_rows)
     rows = db.query(DiagramTag).order_by(DiagramTag.name_lower.asc()).all()
@@ -1197,10 +1199,9 @@ def list_tags(user: User = Depends(get_request_user), db: Session = Depends(get_
 def create_tag(
     payload: DiagramTagCreatePayload,
     request: Request,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    _require_admin_role(db, user)
     name = _clean_tag_name(payload.name)
     key = name.lower()
     if db.query(DiagramTag).filter(DiagramTag.name_lower == key).one_or_none():
@@ -1235,10 +1236,9 @@ def update_tag(
     tag_id: DbId,
     payload: DiagramTagUpdatePayload,
     request: Request,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    _require_admin_role(db, user)
     row = db.query(DiagramTag).filter(DiagramTag.id == tag_id).one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail="Tag not found")
@@ -1280,7 +1280,7 @@ def update_tag(
 @router.get("/v1/users/search")
 def search_users(
     q: Annotated[str, Query(max_length=160)] = "",
-    _: User = Depends(get_request_user),
+    _: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     """Usernames for the share dialog. Two characters at least, and usernames
@@ -1303,7 +1303,7 @@ def search_users(
 
 @router.get("/v1/diagram-ai/status")
 def get_diagram_ai_status(
-    _: User = Depends(get_request_user), db: Session = Depends(get_db)
+    _: User = Depends(require_authenticated), db: Session = Depends(get_db)
 ):
     status = diagram_ai_status()
     if not is_enabled("ai_generation", db):
@@ -1452,7 +1452,7 @@ def _generate_ai_diagram_code(
 )
 def generate_new_diagram_ai_code(
     payload: DiagramAIGeneratePayload,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     return _generate_ai_diagram_code(payload, user, db)
@@ -1465,7 +1465,7 @@ def generate_new_diagram_ai_code(
 def generate_existing_diagram_ai_code(
     diagram_ref: str,
     payload: DiagramAIGeneratePayload,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     diagram = _get_diagram(db, diagram_ref, user, require_write=True)
@@ -1476,7 +1476,7 @@ def generate_existing_diagram_ai_code(
 def create_diagram(
     payload: DiagramCreatePayload,
     request: Request,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     _require_perm(db, user, PERM_DIAGRAM_WRITE, "Diagram write")
@@ -1547,7 +1547,7 @@ def create_diagram(
 def clone_diagram(
     diagram_ref: str,
     request: Request,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     _require_perm(db, user, PERM_DIAGRAM_WRITE, "Diagram write")
@@ -1653,7 +1653,7 @@ def clone_diagram(
 @router.get("/v1/diagrams/{diagram_ref}")
 def get_diagram(
     diagram_ref: str,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     return _diagram_detail(db, _get_diagram(db, diagram_ref, user), user=user)
@@ -1664,7 +1664,7 @@ def update_diagram(
     diagram_ref: str,
     payload: DiagramUpdatePayload,
     request: Request,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     diagram = _get_diagram(db, diagram_ref, user, require_write=True, for_update=True)
@@ -1715,7 +1715,7 @@ def update_diagram(
 def delete_diagram(
     diagram_ref: str,
     request: Request,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     diagram = _get_diagram(db, diagram_ref, user, for_update=True)
@@ -1745,7 +1745,7 @@ def delete_diagram(
 @router.get("/v1/diagrams/{diagram_ref}/versions")
 def list_versions(
     diagram_ref: str,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     diagram = _get_diagram(db, diagram_ref, user)
@@ -1761,7 +1761,7 @@ def list_versions(
 @router.get("/v1/diagram-versions/{version_id}")
 def get_version(
     version_id: DbId,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     ver = db.query(DiagramVersion).filter(DiagramVersion.id == version_id).one_or_none()
@@ -1781,7 +1781,7 @@ def save_diagram(
     diagram_ref: str,
     payload: DiagramSavePayload,
     request: Request,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     # Validation first, outside the row lock.
@@ -1848,7 +1848,7 @@ def save_diagram(
 def lock_diagram(
     diagram_ref: str,
     payload: DiagramLockPayload,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     diagram = _get_diagram(db, diagram_ref, user, require_write=True, for_update=True)
@@ -1876,7 +1876,7 @@ def lock_diagram(
 @router.delete("/v1/diagrams/{diagram_ref}/lock")
 def unlock_diagram(
     diagram_ref: str,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     diagram = _get_diagram(db, diagram_ref, user, for_update=True)
@@ -1897,7 +1897,7 @@ def unlock_diagram(
 @router.get("/v1/diagrams/{diagram_ref}/comments")
 def list_comments(
     diagram_ref: str,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     diagram = _get_diagram(db, diagram_ref, user)
@@ -1931,7 +1931,7 @@ def create_comment(
     diagram_ref: str,
     payload: DiagramCommentCreatePayload,
     request: Request,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     diagram = _get_diagram(db, diagram_ref, user)
@@ -1980,7 +1980,7 @@ def update_comment(
     comment_id: DbId,
     payload: DiagramCommentUpdatePayload,
     request: Request,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     row = db.query(DiagramComment).filter(DiagramComment.id == comment_id).one_or_none()
@@ -2031,7 +2031,7 @@ def update_comment(
 def delete_comment(
     comment_id: DbId,
     request: Request,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     row = db.query(DiagramComment).filter(DiagramComment.id == comment_id).one_or_none()
@@ -2069,7 +2069,7 @@ def delete_comment(
 @router.get("/v1/diagrams/{diagram_ref}/entity-links")
 def list_entity_links(
     diagram_ref: str,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     diagram = _get_diagram(db, diagram_ref, user)
@@ -2081,7 +2081,7 @@ def create_entity_link(
     diagram_ref: str,
     payload: DiagramEntityLinkPayload,
     request: Request,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     diagram = _get_diagram(db, diagram_ref, user, require_write=True)
@@ -2131,7 +2131,7 @@ def create_entity_link(
 def delete_entity_link(
     link_id: DbId,
     request: Request,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     row = (
@@ -2169,7 +2169,7 @@ def delete_entity_link(
 @router.get("/v1/diagrams/{diagram_ref}/metadata-links")
 def list_metadata_links(
     diagram_ref: str,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     diagram = _get_diagram(db, diagram_ref, user)
@@ -2181,7 +2181,7 @@ def create_metadata_link(
     diagram_ref: str,
     payload: DiagramMetadataLinkPayload,
     request: Request,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     diagram = _get_diagram(db, diagram_ref, user, require_write=True)
@@ -2214,7 +2214,7 @@ def create_metadata_link(
 def delete_metadata_link(
     link_id: DbId,
     request: Request,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     row = (
@@ -2245,7 +2245,7 @@ def delete_metadata_link(
 @router.get("/v1/diagrams/{diagram_ref}/shares")
 def list_diagram_shares(
     diagram_ref: str,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     diagram = _get_diagram(db, diagram_ref, user)
@@ -2268,7 +2268,7 @@ def share_diagram(
     diagram_ref: str,
     payload: DiagramSharePayload,
     request: Request,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     diagram = _get_diagram(db, diagram_ref, user, for_update=True)
@@ -2330,7 +2330,7 @@ def share_diagram(
 def delete_diagram_share(
     share_id: DbId,
     request: Request,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     row = db.query(DiagramShare).filter(DiagramShare.id == share_id).one_or_none()
@@ -2367,7 +2367,7 @@ def export_google_drive(
     diagram_ref: str,
     payload: GoogleDriveExportPayload,
     request: Request,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     """Send one export of a readable diagram to the installation's Drive folder.
@@ -2450,7 +2450,7 @@ def export_google_drive(
 @router.get("/v1/diagrams/{diagram_ref}/changelog")
 def diagram_changelog(
     diagram_ref: str,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     diagram = _get_diagram(db, diagram_ref, user)
@@ -2497,7 +2497,7 @@ def public_diagram_svg(
 def export_diagram(
     diagram_ref: str,
     fmt: str,
-    user: User = Depends(get_request_user),
+    user: User = Depends(require_authenticated),
     db: Session = Depends(get_db),
 ):
     _require_perm(db, user, PERM_DIAGRAM_EXPORT, "Diagram export")

@@ -14,13 +14,16 @@
   - `mosp.security.urls`: `external_url` for stored links, `same_site_path` for redirects and stored paths.
   - `mosp.security.xml`: `parse_untrusted_xml` for every XML document a user or upstream supplies; `mosp.security.svg`: `sanitise_svg` for every stored SVG. MIDENA passes its 3 MiB bound (`MAX_XML_BYTES` in `diagrams.py`).
   - `mosp.security.sso_http`: `client_options` for every identity-provider request (bounded, uncompressed, no redirects, no proxy environment).
-  - `mosp.core.datetime_utils`: `utc_now_naive` for every stored timestamp.
+  - `mosp.core.datetime_utils`: `utc_now_naive` for every stored timestamp, `iso_or_none` for every serialised one; `mosp.core.identifiers.try_uuid` for a UUID a route reads.
+  - `mosp.security.auth`: `require_authenticated` and `require_admin` for every route's account.
+  - `mosp.core.task_deadline`: `TIME_LIMITS`, re-raised before every broad handler in task code (`tests/test_celery_contract.py` checks it).
+  - `mosp.security.json_shape.decode_json` for every JSON document from outside (Google's and the AI provider's answers).
   - `mosp.security.request_limits` and `app/mosp_hooks.body_limit`: body classes, request targets and cookie screening; `mosp.api.routing.Router` for every router, so JSON bodies are decoded with MOSP's shape limits.
   - `mosp.security.sessions`, `mosp.security.csrf` and `mosp.security.auth.cookie_name`: cookies are read and set under these names, never the bare settings.
   - `mosp.security.permissions.bump_authz_versions`: after any change to an account's role, groups or permissions, so its sessions follow.
   - `api/deps.py`: `DbId`, `OptionalDbId`, `PageLimit`, `PageOffset` for every integer parameter.
   - `api/downloads.py`: `attachment_media_type` and `content_disposition_attachment` for every download.
-  - `tasks/maintenance.py` (MOSP's `housekeeping` and `audit_retention` sweeps with MIDENA's locks), `services/entity_changelog.py` (semantic history), `services/notifications.py` (the share-notice outbox).
+  - `tasks/maintenance.py` (MOSP's `housekeeping` and `audit_retention` sweeps with MIDENA's locks), `services/entity_changelog.py` (semantic history), `services/notifications.py` (the share-notice outbox, delivered by `mosp.services.outbox`).
   - In the UI: `app.js` (`safeHref`, `escapeHtml`, `featureOn`/`gateFeature`, `formatDate`, `logout`) and `rendered-diagram-interactions.js` (`svgNodeFromMarkup`, `safeLinkUrl`).
 - A second copy of a helper is a defect even when it starts out identical. Where a behaviour must be the same everywhere, give it one shared helper, route every caller through it, and add a contract test that refuses a hand-rolled copy and proves it would catch one.
 - Trust declared types. Read typed settings, ORM columns and values the code has just built directly. Keep guards where data is untrusted or genuinely optional: request payloads, diagram content, provider answers and nullable columns.

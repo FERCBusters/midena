@@ -25,6 +25,7 @@ from mosp.host import hooks
 from mosp.realtime import sockets
 from mosp.realtime.notifications import notification_hub
 from mosp.security.auth import cookie_name
+from mosp.services import outbox
 from starlette.websockets import WebSocketDisconnect
 
 from tests.conftest import auth_client, generated_password, make_user, peer_wrapper
@@ -100,7 +101,7 @@ def test_a_mail_that_will_never_be_sent_keeps_no_body(monkeypatch):
             subject="A diagram was shared with you",
             body="https://midena.example/diagram.html?id=one-time-secret",
             status="pending",
-            attempts=notifications._MAX_ATTEMPTS - 2,
+            attempts=outbox.MAX_ATTEMPTS - 2,
             next_attempt_at=utc_now_naive() - timedelta(minutes=1),
         )
         s.add(row)
@@ -113,7 +114,7 @@ def test_a_mail_that_will_never_be_sent_keeps_no_body(monkeypatch):
         # Still to be retried: the body is what the retry sends.
         assert (row.status, row.attempts) == (
             "pending",
-            notifications._MAX_ATTEMPTS - 1,
+            outbox.MAX_ATTEMPTS - 1,
         )
         assert "one-time-secret" in row.body
         row.next_attempt_at = utc_now_naive() - timedelta(minutes=1)
@@ -123,6 +124,39 @@ def test_a_mail_that_will_never_be_sent_keeps_no_body(monkeypatch):
         row = s.get(Notification, row_id)
         assert (row.status, row.body) == ("failed", "")
         assert row.last_error == "OSError"
+
+
+def test_the_time_limit_ends_a_notification_run(monkeypatch):
+    """One outbox's failure leaves the next to be sent; the task's time limit
+    is no outbox's failure and ends the run."""
+    from app.tasks import notifications as task
+    from celery.exceptions import SoftTimeLimitExceeded
+    from mosp.services import security_notifications
+
+    drained = []
+
+    def broken(limit):
+        drained.append("app")
+        raise RuntimeError("smtp down")
+
+    monkeypatch.setattr(notifications, "deliver_pending", broken)
+    monkeypatch.setattr(
+        security_notifications,
+        "deliver_pending",
+        lambda limit: drained.append("mosp") or 2,
+    )
+    assert task.deliver_notifications() == {"sent": 2}
+    assert drained == ["app", "mosp"]
+
+    def stopped(limit):
+        drained.append("stopped")
+        raise SoftTimeLimitExceeded()
+
+    drained.clear()
+    monkeypatch.setattr(notifications, "deliver_pending", stopped)
+    with pytest.raises(SoftTimeLimitExceeded):
+        task.deliver_notifications()
+    assert drained == ["stopped"]
 
 
 def test_body_limits_by_route():

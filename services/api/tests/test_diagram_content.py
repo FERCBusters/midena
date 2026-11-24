@@ -200,6 +200,9 @@ def test_wrong_tokens_and_private_diagrams_all_answer_the_same(client):
         f"/v1/public/diagrams/{public['uuid']}/{'x' * 97}",
         f"/v1/public/diagrams/{private['uuid']}/{private['public_token'] or 'x'}",
         f"/v1/public/diagrams/not-a-uuid/{public['public_token']}",
+        # A diagram has one address: other spellings of its UUID name none.
+        f"/v1/public/diagrams/{{{public['uuid']}}}/{public['public_token']}",
+        f"/v1/public/diagrams/urn:uuid:{public['uuid']}/{public['public_token']}",
     ):
         response = anonymous.get(path)
         assert response.status_code == 404

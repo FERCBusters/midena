@@ -25,6 +25,7 @@ from urllib.parse import urlsplit
 import httpx2 as httpx
 from joserfc import jwt
 from joserfc.jwk import RSAKey
+from mosp.security.json_shape import decode_json
 
 from app.core.config import settings
 
@@ -111,7 +112,7 @@ def _bounded_json(response: httpx.Response) -> dict[str, Any]:
         if len(body) > _MAX_ANSWER_BYTES:
             raise GoogleDriveExportError("Google Drive gave an unexpected answer.")
     try:
-        value = json.loads(body)
+        value = decode_json(body)
     except ValueError:
         raise GoogleDriveExportError(
             "Google Drive gave an unexpected answer."

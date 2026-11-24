@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
 import httpx2 as httpx
+from mosp.security.json_shape import decode_json
 
 from app.core.config import settings
 
@@ -178,7 +178,7 @@ async def generate_diagram_code(
         log.warning("AI provider answered HTTP %s", status)
         raise DiagramAIError(f"The AI provider refused the request (HTTP {status}).")
     try:
-        data = json.loads(body)
+        data = decode_json(body)
         content = data["choices"][0]["message"]["content"]
     except Exception as exc:
         raise DiagramAIError(

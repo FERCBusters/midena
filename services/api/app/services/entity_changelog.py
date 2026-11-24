@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from mosp.core.datetime_utils import utc_now_naive
+from mosp.core.datetime_utils import iso_or_none, utc_now_naive
 from sqlalchemy import desc, or_
 from sqlalchemy.orm import Session
 
@@ -246,7 +246,7 @@ def _serialise_changelog(row: EntityChangelog) -> dict[str, Any]:
         "changes": row.changes or [],
         "changed_by_user_id": row.changed_by_user_id,
         "changed_by_username": row.changed_by_username,
-        "changed_at": row.changed_at.isoformat() if row.changed_at else None,
+        "changed_at": iso_or_none(row.changed_at),
         "request_method": row.request_method,
         "request_path": row.request_path,
     }

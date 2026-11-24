@@ -6,14 +6,17 @@ from typing import Annotated, Any
 
 from fastapi import Body, Depends, HTTPException, Query, Request
 from mosp.api.routing import Router
+from mosp.core.datetime_utils import iso_or_none
 from mosp.core.email_address import single_mailbox
-from mosp.security.auth import create_user
+from mosp.security.auth import create_user, require_admin, require_authenticated
 from mosp.security.client_ip import request_ip
 from mosp.security.passwords import hash_password
 from mosp.security.permissions import (
     bump_authz_versions,
     group_member_ids,
     has_permission,
+    normalize_group_description,
+    normalize_group_name,
 )
 from mosp.security.roles import (
     attach_effective_role,
@@ -27,14 +30,7 @@ from mosp.services.login import sign_in_key
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
-from app.api.deps import (
-    DbId,
-    OptionalDbId,
-    PageLimit,
-    PageOffset,
-    get_request_user,
-    require_admin,
-)
+from app.api.deps import DbId, OptionalDbId, PageLimit, PageOffset
 from app.api.payloads import (
     AdminGroupCreatePayload,
     AdminGroupPermissionsUpdatePayload,
@@ -81,7 +77,7 @@ def _ensure_an_admin_remains(db: Session, detail: str) -> None:
 
 
 def require_audit_access(
-    user: User = Depends(get_request_user), db: Session = Depends(get_db)
+    user: User = Depends(require_authenticated), db: Session = Depends(get_db)
 ) -> User:
     eff = attach_effective_role(db, user)
     if eff != "admin" and not has_permission(db, user, PERM_AUDITTRAIL_READ):
@@ -380,7 +376,7 @@ def create_group(
     _: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    name = body.name.strip()
+    name = normalize_group_name(body.name)
     if not name:
         raise HTTPException(status_code=400, detail="name is required")
     role = _group_role(body.role)
@@ -388,7 +384,7 @@ def create_group(
         raise HTTPException(status_code=409, detail="group exists")
     g = Group(
         name=name,
-        description=(body.description or "").strip() or None,
+        description=normalize_group_description(body.description),
         role=role,
     )
     db.add(g)
@@ -408,7 +404,7 @@ def update_group(
     body = payload.model_dump(exclude_unset=True)
 
     if "name" in body:
-        name = (body.get("name") or "").strip()
+        name = normalize_group_name(payload.name or "")
         if not name:
             raise HTTPException(status_code=400, detail="name cannot be empty")
         existing = (
@@ -421,7 +417,7 @@ def update_group(
         g.name = name
 
     if "description" in body:
-        g.description = (body.get("description") or "").strip() or None
+        g.description = normalize_group_description(body.get("description"))
 
     if "role" in body:
         lock_admin_changes(db)
@@ -552,7 +548,7 @@ def admin_audit_trail(
     items = [
         {
             "id": str(row.id),
-            "ts": row.ts.isoformat() if row.ts else None,
+            "ts": iso_or_none(row.ts),
             "username": row.username,
             "method": row.method,
             "path": row.path,
