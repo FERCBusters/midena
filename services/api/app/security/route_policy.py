@@ -15,7 +15,8 @@ about who may call it is refused for everyone, administrators included.
   object (ownership, sharing, locks).
 - admin writes and the /v1/admin/ namespace: the administrator role, apart
   from the audit readers, which the audittrail.read permission also opens and
-  whose routes check it.
+  whose routes check it. API tokens are issued and revoked there.
+- token reads: the only routes an API token reaches, as its account.
 
 Routes keep their own checks in every case: this table is the second lock.
 tests/test_route_policy.py fails when a write is undeclared or a declaration
@@ -92,6 +93,11 @@ SELF_SERVICE = RouteSet(
 
 ADMIN_WRITES = RouteSet({"POST": ("/v1/tags",), "PATCH": ("/v1/tags/{tag_id}",)})
 
+# The reads an API token may make (mosp.security.api_tokens): listing and
+# opening diagrams, which apply the token's account's visibility as they do
+# for a browser. A token reaches no other route.
+TOKEN_READS = RouteSet({"GET": ("/v1/diagrams", "/v1/diagrams/{diagram_ref}")})
+
 MIDENA_POLICY = RoutePolicy(
     public=PUBLIC_ROUTES,
     self_service=SELF_SERVICE,
@@ -101,6 +107,7 @@ MIDENA_POLICY = RoutePolicy(
     admin_exempt=RouteSet({"GET": ("/v1/admin/audit", "/v1/admin/entity-changelog")}),
     admin_writes=ADMIN_WRITES,
     refuse_undeclared_writes=True,
+    token_reads=TOKEN_READS,
     unaudited_public_reads=frozenset({"/v1/system/health"}),
 )
 

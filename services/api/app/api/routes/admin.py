@@ -24,7 +24,7 @@ from mosp.security.roles import (
     lock_admin_changes,
     normalize_role,
 )
-from mosp.services import security_notifications
+from mosp.services import api_tokens, security_notifications
 from mosp.services.account import end_password_recognition
 from mosp.services.login import sign_in_key
 from sqlalchemy import desc
@@ -207,8 +207,10 @@ def update_user_route(
         bump_authz_versions(db, [u.id])
     if payload.is_active is False and u.is_active:
         # As in KEEN, deactivation ends the account's sessions for good: they
-        # do not return if the account is activated again.
+        # do not return if the account is activated again. Its API tokens are
+        # revoked with them, in the same transaction.
         _end_sessions(u)
+        api_tokens.revoke_for_account(db, u)
     if payload.is_active is not None:
         u.is_active = bool(payload.is_active)
 

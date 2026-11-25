@@ -5,6 +5,7 @@ from datetime import datetime
 
 from mosp.core.datetime_utils import utc_now_naive
 from mosp.db.accounts import (
+    ApiTokenMixin,
     AuditLogMixin,
     GroupMixin,
     MfaChallengeMixin,
@@ -103,6 +104,12 @@ class SsoEmailChallenge(Base, SsoEmailChallengeMixin):
 class AuditLog(Base, AuditLogMixin):
     """Requests recorded as the audit trail (mosp.middleware). Semantic
     before/after changes are stored separately in EntityChangelog."""
+
+
+class ApiToken(Base, ApiTokenMixin):
+    """Tokens administrators issue so another application (KEEN, say) can read
+    diagrams as one account (mosp.security.api_tokens); the reads they reach
+    are listed in app.security.route_policy."""
 
 
 class UserPreference(Base):

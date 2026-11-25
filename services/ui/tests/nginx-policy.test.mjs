@@ -207,6 +207,7 @@ test("the administration page and its scripts go only to administrators", () => 
     "= /admin.html",
     "= /pages/admin.js",
     "= /pages/admin-features.js",
+    "= /pages/admin-api-tokens.js",
   ]) {
     const block = locationBlock(opening);
     assert.match(block, /auth_request \/_auth_check_admin;/, opening);

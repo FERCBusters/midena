@@ -71,6 +71,7 @@ def test_every_write_is_declared_and_every_declaration_is_served():
         | _templates(MIDENA_POLICY.object_checked)
         | _templates(MIDENA_POLICY.admin_exempt)
         | _templates(MIDENA_POLICY.admin_writes)
+        | _templates(MIDENA_POLICY.token_reads)
         | set(MIDENA_POLICY.gated.entries)
     )
     assert declared - SERVED == set()

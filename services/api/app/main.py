@@ -6,7 +6,7 @@ from fastapi import FastAPI, WebSocket
 from fastapi.exceptions import RequestValidationError
 from mosp import middleware
 from mosp.api.errors import domain_error_response, validation_error_response
-from mosp.api.routes import account, auth, mfa, sso_emails
+from mosp.api.routes import account, api_tokens, auth, mfa, sso_emails
 from mosp.api.sql_trace import RequestLabelMiddleware
 from mosp.realtime import sockets
 from mosp.realtime.notifications import (
@@ -82,6 +82,9 @@ def root():
 # password and SSO addresses (mosp).
 for router in (auth.router, mfa.router, account.router, sso_emails.router):
     app.include_router(router, tags=["auth"])
+# Administrators' API tokens, which let another application (KEEN, say) read
+# diagrams as one account (mosp).
+app.include_router(api_tokens.router, tags=["admin"])
 app.include_router(api_router)
 
 # Authentication, CSRF and the audit trail (mosp), inside the middleware below.

@@ -62,6 +62,11 @@
             Features
           </button>
         </li>
+                <li class="nav-item" role="presentation">
+          <button class="nav-link" id="tab-api-tokens" data-bs-toggle="tab" data-bs-target="#pane-api-tokens" type="button" role="tab" aria-controls="pane-api-tokens" aria-selected="false">
+            <i class="bi bi-key me-2" aria-hidden="true"></i>API tokens
+          </button>
+        </li>
       </ul>
 
       <div class="tab-content flex-grow-1" id="adminTabContent">
@@ -294,6 +299,49 @@
             </div>
           </div>
         </section>
+
+        <section class="tab-pane fade" id="pane-api-tokens" role="tabpanel" aria-labelledby="tab-api-tokens" tabindex="0">
+          <div class="card mb-3">
+            <div class="card-body">
+              <h2 class="h5">API tokens</h2>
+              <p>An API token lets another application, such as KEEN, list and open diagrams as one account: it sees exactly the diagrams that account can read, and it can change nothing. Issue each token for an account that holds only the access the other application needs.</p>
+              <p class="small text-muted">The token is shown once. The account's holder is told by email when a token is issued or revoked for it. Deactivating the account revokes its tokens, and they stay revoked if it is activated again. Changing the account's password or second factors leaves its tokens as they are. Revoke a token as soon as the application that holds it no longer needs it.</p>
+              <div id="api-token-off" class="alert alert-secondary small" role="status" hidden>API tokens are turned off for this installation. Set <code>MIDENA_API_TOKENS_ENABLED=true</code> to issue tokens and have MIDENA accept them. Tokens issued earlier are listed below and can still be revoked.</div>
+              <form id="apiTokenForm" class="row g-2 align-items-end mb-3">
+                <div class="col-md-3">
+                  <label class="form-label" for="api-token-name">Name</label>
+                  <input id="api-token-name" class="form-control" name="name" maxlength="100" placeholder="KEEN" required />
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label" for="api-token-user">Acts as account</label>
+                  <select id="api-token-user" class="form-select" name="user_id" required></select>
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label" for="api-token-expiry">Expires</label>
+                  <select id="api-token-expiry" class="form-select" name="expires_in_days">
+                    <option value="30">In 30 days</option>
+                    <option value="90">In 90 days</option>
+                    <option value="180">In 180 days</option>
+                    <option value="365" selected>In a year</option>
+                    <option value="">Never</option>
+                  </select>
+                </div>
+                <div class="col-md-auto">
+                  <button type="submit" class="btn btn-sm btn-primary text-nowrap"><i class="bi bi-key" aria-hidden="true"></i> Issue token</button>
+                </div>
+              </form>
+              <div id="api-token-issued" class="alert alert-warning" role="status" hidden>
+                <div class="fw-bold mb-1">Copy this token now: it is not shown again.</div>
+                <div class="input-group input-group-sm">
+                  <input id="api-token-value" class="form-control font-monospace" type="text" readonly aria-label="New API token" />
+                  <button id="api-token-copy" type="button" class="btn btn-outline-secondary">Copy</button>
+                </div>
+              </div>
+              <div id="api-token-status" class="small" role="status" aria-live="polite" hidden></div>
+              <div id="api-token-list"></div>
+            </div>
+          </div>
+        </section>
       </div>
     </div>
   </main>
@@ -304,5 +352,6 @@
   <script defer src="/pages/admin.js"></script>
   <script defer src="/pages/admin-features.js"></script>
   <script defer src="/pages/admin-diagrams.js"></script>
+  <script defer src="/pages/admin-api-tokens.js"></script>
 </body>
 </html>

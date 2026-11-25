@@ -16,7 +16,8 @@ MIDENA is the Mapping, Integration, Diagram Editing and Navigation Application: 
 - **Visibility and sharing.** Each diagram is `private`, `internal` (every signed-in user) or `public`. Diagrams are shared with named users as viewers or editors, with an e-mail notice to the recipient.
 - **Public views and embeds.** A public diagram has a read-only page and an embeddable view, each addressed by the diagram's UUID and a random token. Making a diagram private again retires its links.
 - **Export.** BPMN XML, Mermaid source and SVG from the server; PNG, JPG and PDF rendered in the browser; optional export of any of these to a Google Drive folder the operator configures.
-- **Administration.** Accounts and groups, each an administrator, an ordinary account or (accounts only) taking its role from its groups, with permissions for what ordinary accounts may do; local and LDAP sign-in with TOTP and WebAuthn second factors; single sign-on through OpenID Connect, Google or GitHub for existing accounts; feature switches; diagram header, footer and theme; locks; the mail outboxes; request audit log and semantic change history.
+- **Reading from other applications.** Where the deployment turns them on, administrators issue API tokens, each acting as one account, so another application can list and open the diagrams that account can read. KEEN uses one to show MIDENA diagrams among its ISMS policies and processes. A token reads nothing else and changes nothing.
+- **Administration.** Accounts and groups, each an administrator, an ordinary account or (accounts only) taking its role from its groups, with permissions for what ordinary accounts may do; local and LDAP sign-in with TOTP and WebAuthn second factors; single sign-on through OpenID Connect, Google or GitHub for existing accounts; feature switches; API tokens; diagram header, footer and theme; locks; the mail outboxes; request audit log and semantic change history.
 
 ## Running locally
 
@@ -41,6 +42,7 @@ Settings use the `MIDENA_` prefix; `.env.example` documents each one. The main g
 - `MIDENA_OIDC_*`, `MIDENA_GOOGLE_*`, `MIDENA_GITHUB_*`, `MIDENA_LDAP_*`: single sign-on providers and directory sign-in.
 - `MIDENA_SECURITY_TRUSTED_PROXY_CIDRS`, `MIDENA_TRUST_REMOTE_USER`, `MIDENA_REMOTE_USER_TRUSTED_CIDRS`: proxies and header authentication.
 - `MIDENA_FEATURE_PUBLIC_DIAGRAMS`, `MIDENA_FEATURE_AI_GENERATION`, `MIDENA_FEATURE_GOOGLE_DRIVE_EXPORT`: the ceiling for the feature switches administrators manage.
+- `MIDENA_API_TOKENS_ENABLED` (off by default): whether administrators may issue API tokens and MIDENA accepts them.
 - `MIDENA_GOOGLE_DRIVE_*`: the service account and destination folder for Drive export.
 - `MIDENA_AI_*`: the AI endpoint (HTTPS), model, key, timeout and per-user allowance.
 - `MIDENA_SMTP_*`: mail for share notices, security notices and address confirmation.
